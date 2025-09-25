@@ -34,7 +34,6 @@
    markdown-indent
    mini-posframe
    multiple-cursors
-   ;; gleam
    nginx
    nixos
    (node :variables node-add-modules-path t)

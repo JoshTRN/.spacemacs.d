@@ -551,6 +551,13 @@ before packages are loaded."
   (when (file-exists-p host-config-file)
     (load host-config-file))
 
+  (let ((os-file (expand-file-name
+                  (concat "os/" (symbol-name system-type) ".el")
+                  dotspacemacs-directory)))
+    (when (file-exists-p os-file)
+      (load os-file)))
+
+
   )
 
 ;; Do not write anything past this comment. This is where Emacs will
