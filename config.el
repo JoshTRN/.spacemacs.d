@@ -759,7 +759,19 @@ If `solaire-default-face` is available, use its background; otherwise use the de
                    (if (eq w 'unspecified) 'bold w))
         :foreground "#D4AA00"
         :background "#3A2F00"
-        :box (:line-width 1 :color "#D4AA00"))))))
+        :box (:line-width 1 :color "#D4AA00"))))
+
+   '(org-modern-date-active   ((t (:foreground "#B0C0D0" :background "#1A2A36" :box (:line-width 1 :color "#3A4A5A") :weight normal))))
+   '(org-modern-date-inactive ((t (:foreground "#4a6a7f" :background "#1A2A36" :box (:line-width 1 :color "#2A3A4A") :weight normal))))
+   '(org-modern-done ((t (:foreground "#5FAF5F" :weight bold :background "#1F3A1F" :box (:line-width 1 :color "#5FAF5F")))))
+   '(org-modern-priority ((t (:inherit default))))
+   '(org-modern-tag ((t (:family "Helvetica" :weight semibold :height 0.9 :foreground "#33878F" :background "#0D2224" :box (:line-width 1 :color "#33878F")))))
+   '(org-modern-time-active   ((t (:foreground "#82A0C2" :background "#1A2A36" :box (:line-width 1 :color "#3A4A5A") :weight normal))))
+   '(org-modern-time-inactive ((t (:foreground "#8aa2b2" :background "#1A2A36" :box (:line-width 1 :color "#2A3A4A") :weight normal))))
+   '(org-modern-todo ((t (:foreground "#D77070" :weight bold :background "#3A2020" :box (:line-width 1 :color "#D77070")))))
+   '(org-modern-todo-faces `(("IN PROGRESS" :family ,(face-attribute 'default :family nil 'default) :height ,(let ((h (face-attribute 'org-modern-todo :height nil 'default))) (if (eq h 'unspecified) 1.0 h)) :weight ,(let ((w (face-attribute 'org-modern-todo :weight nil 'default))) (if (eq w 'unspecified) 'bold w)) :foreground "#D4AA00" :background "#3A2F00" :box (:line-width 1 :color "#D4AA00"))))
+   '(org-special-keyword ((t (:inherit org-headline-done))))
+   ))
 
 (advice-add 'groovy-mode :after (lambda (&rest _) (tree-sitter-hl-mode -1)))
 
