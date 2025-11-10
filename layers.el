@@ -3,6 +3,7 @@
  '(
    (auto-completion :variables auto-completion-enable-snippets-in-popup t)
    better-defaults
+   clojure
    csv
    dap
    debug
@@ -32,7 +33,6 @@
    lua
    markdown
    markdown-indent
-   mini-posframe
    multiple-cursors
    nginx
    nixos
@@ -54,13 +54,13 @@
    prettier
    (python :variables python-backend 'lsp python-lsp-server 'pyright)
    rust
+   scala
    search-engine
    shell-scripts
    (shell :variables
           shell-default-height 30
           shell-default-position 'full
           shell-default-shell 'multi-vterm)
-   slack
    spell-checking
    sql
    syntax-checking
@@ -68,6 +68,7 @@
    terraform
    themes-megapack
    treemacs
+   ruby
    (tree-sitter :variables
                 tree-sitter-langs '(groovy python javascript))
    (typescript :variables
