@@ -138,7 +138,8 @@
 (spacemacs/set-leader-keys "oij" #'insert-java-log-heading)
 (spacemacs/set-leader-keys "oF" #'finder)
 
-
+(add-hook 'evil-insert-state-entry-hook (lambda () (blink-cursor-mode 1)))
+(add-hook 'evil-insert-state-exit-hook (lambda () (blink-cursor-mode 0)))
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           ORG-FUNCTIONS

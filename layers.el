@@ -18,9 +18,7 @@
    (go :variables
        go-backend 'lsp
        go-tab-width 2)
-   (groovy :variables
-           groovy-backend 'lsp
-           groovy-lsp-jar-path "~/code/groovy-language-server/build/libs/groovy-language-server-all.jar")
+   groovy
    haskell
    (helm :variables helm-position 'top helm-use-posframe t)
    html
