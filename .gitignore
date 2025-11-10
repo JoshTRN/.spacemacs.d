@@ -2,3 +2,4 @@
 /Joshuas-Laptop.local.el
 *.aider.*
 /joshua-xps13.el
+*.elc
