@@ -1,2 +1,3 @@
 /.spacemacs.env
 /Joshuas-Laptop.local.el
+*.aider.*
