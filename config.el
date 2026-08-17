@@ -940,3 +940,37 @@ If `solaire-default-face` is available, use its background; otherwise use the de
              for file-res = (helm-ff-filter-candidate-one-by-one real t t)
              for display = (car file-res)
              collect (cons display real))))
+
+
+;; Work around evil-collection-vterm.elc from 20260626 missing its provide.
+(defvar evil-collection-vterm-maps '(vterm-mode-map))
+(defun spacemacs/user-vterm-send-c-c ()
+  "Send C-c to the process running in the current vterm."
+  (interactive)
+  (when (fboundp 'vterm-send-key)
+    (vterm-send-key "c" nil nil t)))
+(defun spacemacs/user-vterm-send-c-d ()
+  "Send C-d to the process running in the current vterm."
+  (interactive)
+  (when (fboundp 'vterm-send-key)
+    (vterm-send-key "d" nil nil t)))
+(defun spacemacs/user-vterm-evil-keys ()
+  "Repair terminal control keys in vterm under Evil."
+  (when (boundp 'vterm-mode-map)
+    (define-key vterm-mode-map (kbd "C-d") #'spacemacs/user-vterm-send-c-d)
+    (when (fboundp 'evil-define-key)
+      (evil-define-key 'insert vterm-mode-map
+        (kbd "C-c") #'spacemacs/user-vterm-send-c-c
+        (kbd "C-d") #'spacemacs/user-vterm-send-c-d))))
+(defun spacemacs/user-vterm-evil-collection-setup ()
+  "Minimal vterm setup while the packaged evil-collection vterm file is broken."
+  (when (fboundp 'evil-set-initial-state)
+    (evil-set-initial-state 'vterm-mode 'insert))
+  (spacemacs/user-vterm-evil-keys))
+(defalias 'evil-collection-vterm-setup
+  #'spacemacs/user-vterm-evil-collection-setup)
+(with-eval-after-load 'evil-collection
+  (defalias 'evil-collection-vterm-setup
+    #'spacemacs/user-vterm-evil-collection-setup)
+  (provide 'evil-collection-vterm))
+(provide 'evil-collection-vterm)
