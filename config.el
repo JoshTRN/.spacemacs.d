@@ -81,19 +81,6 @@
     (insert "echo \"" line "\"\n")
     (insert "echo -e \"" border "\\n\"\n")))
 
-(defun finder (&optional path)
-  "Open PATH (or current directory) in macOS Finder and bring Finder to front."
-  (interactive)
-  (let ((target (expand-file-name (or path default-directory))))
-    (shell-command
-     (format "osascript -e 'tell application \"Finder\" to activate' \
--e 'tell application \"Finder\" to open (POSIX file \"%s\") as alias'"
-             target))))
-
-;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;;                           MISC-SETTINGS
-;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 (defun insert-java-log-heading (title)
   "Insert a formatted Java log.info heading with TITLE (forced uppercase)."
   (interactive "sHeading: ")
@@ -110,6 +97,10 @@
     (insert border-line "\n")
     (insert "\"\"\");\n")))
 
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;;                           MISC-SETTINGS
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 (setq-default
  fill-column 110
  highlight-indent-guides-character 9615
@@ -119,6 +110,7 @@
  )
 
 (setq
+ scroll-margin 4
  git-gutter-fr:side 'left-fringe
  helm-move-to-line-cycle-in-source nil
  helm-swoop-speed-or-color t
@@ -218,7 +210,6 @@ Only runs in Org Mode buffers."
    (js         . t)
    (latex      . t)
    (mermaid    . t)
-   (powershell . t)
    (python     . t)
    (shell      . t)
    (sql        . t)
@@ -239,23 +230,26 @@ but reset any face remapping applied elsewhere."
 
 (defun org-inline-code-pad ()
   "Add left/right padding to inline ~code~ and =verbatim=."
-  (remove-overlays (point-min) (point-max) 'my-org-inline-pad t)
-  (save-excursion
-    (goto-char (point-min))
-    ;; Match ~code~ or =verbatim= (doesn't cross newlines)
-    (while (re-search-forward "[=~][^=~\n]+?[=~]" nil t)
-      (let* ((beg (match-beginning 0))
-             (end (match-end 0))
-             (ov  (make-overlay beg end)))
-        (overlay-put ov 'my-org-inline-pad t)
-        (overlay-put ov 'face 'org-verbatim) ; keep your face
-        ;; add 1 space “padding” on each side, colored like org-verbatim
+  ;; This function runs from `after-change-functions'.  Preserve match data:
+  ;; commands such as `org-todo' may still be using a match they established
+  ;; before making the change that invoked this hook.
+  (save-match-data
+    (remove-overlays (point-min) (point-max) 'my-org-inline-pad t)
+    (save-excursion
+      (goto-char (point-min))
+      ;; Match ~code~ or =verbatim= (doesn't cross newlines)
+      (while (re-search-forward "[=~][^=~\n]+?[=~]" nil t)
+        (let* ((beg (match-beginning 0))
+               (end (match-end 0))
+               (ov  (make-overlay beg end)))
+          (overlay-put ov 'my-org-inline-pad t)
+          (overlay-put ov 'face 'org-verbatim) ; keep your face
+          ;; add 1 space “padding” on each side, colored like org-verbatim
 
-        (overlay-put ov 'before-string
-                     (propertize " " 'face '(variable-pitch org-verbatim)))
-        (overlay-put ov 'after-string
-                     (propertize " " 'face '(variable-pitch org-verbatim)))
-        ))))
+          (overlay-put ov 'before-string
+                       (propertize " " 'face '(variable-pitch org-verbatim)))
+          (overlay-put ov 'after-string
+                       (propertize " " 'face '(variable-pitch org-verbatim))))))))
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                              ORG-VARS
@@ -285,8 +279,8 @@ but reset any face remapping applied elsewhere."
 ;;                             ORG-HOOKS
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-(with-eval-after-load 'org
-  (ligature-set-ligatures 'org-mode '("->" "=>" "<=" ">=" "==" "!=" "<-")))
+                                        ; (with-eval-after-load 'org
+                                        ;  (ligature-set-ligatures 'org-mode '("->" "=>" "<=" ">=" "==" "!=" "<-")))
 
 (add-hook 'org-mode-hook #'org-enable-hover-links)
 (add-hook 'org-mode-hook #'org-modern-bullet-coloring)
@@ -342,19 +336,42 @@ but reset any face remapping applied elsewhere."
 
 (setq
  org-agenda-block-separator ?─
- org-agenda-custom-commands '(("v" "A better agenda view"
-                               ((tags "PRIORITY=\"A\""
-                                      ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo 'done))
-                                       (org-agenda-overriding-header "High-priority unfinished tasks:")))
-                                (tags "PRIORITY=\"B\""
-                                      ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo 'done))
-                                       (org-agenda-overriding-header "Medium-priority unfinished tasks:")))
-                                (tags "PRIORITY=\"C\""
-                                      ((org-agenda-skip-function '(org-agenda-skip-entry-if 'todo 'done))
-                                       (org-agenda-overriding-header "Low-priority unfinished tasks:")))
+ org-agenda-custom-commands
+ '(("v" "A better agenda view"
 
-                                (agenda "")
-                                (alltodo ""))))
+    (;; Priority sections
+     (tags-todo "PRIORITY=\"A\""
+                ((org-agenda-skip-function
+                  '(org-agenda-skip-entry-if 'todo 'done))
+                 (org-agenda-overriding-header
+                  "High-priority unfinished tasks:")))
+
+     (tags-todo "PRIORITY=\"B\""
+                ((org-agenda-skip-function
+                  '(org-agenda-skip-entry-if 'todo 'done))
+                 (org-agenda-overriding-header
+                  "Medium-priority unfinished tasks:")))
+
+     (tags-todo "PRIORITY=\"C\""
+                ((org-agenda-skip-function
+                  '(org-agenda-skip-entry-if 'todo 'done))
+                 (org-agenda-overriding-header
+                  "Low-priority unfinished tasks:")))
+
+     ;; Daily agenda with time grid
+     (agenda ""
+             ((org-agenda-overriding-header "Schedule")
+              (org-agenda-span 1)
+              (org-agenda-time-grid
+               '((daily today require-timed)
+                 (800 1000 1200 1400 1600 1800 2000)
+                 ""
+                 ""))))
+
+     ;; Remaining TODOs
+     (alltodo ""
+              ((org-agenda-overriding-header "All remaining TODOs"))))))
+
  org-agenda-time-grid '((daily today require-timed)
                         (800 1000 1200 1400 1600 1800 2000)
                         ;; now line: leading space, no trailing
@@ -627,6 +644,15 @@ but reset any face remapping applied elsewhere."
 
 (setq vterm-always-compile-module t)
 
+(with-eval-after-load 'vterm
+  (spacemacs/user-vterm-evil-keys))
+
+(with-eval-after-load 'evil
+  (with-eval-after-load 'vterm
+    (spacemacs/user-vterm-evil-keys)))
+
+(add-hook 'vterm-mode-hook #'spacemacs/user-vterm-evil-keys)
+
 (defun reload-term ()
   "Compile vterm, then reinstall vterm and multi-vterm packages."
   (interactive)
@@ -745,11 +771,44 @@ If `solaire-default-face` is available, use its background; otherwise use the de
 
 (with-eval-after-load 'org
   (custom-set-faces
+   '(org-modern-label
+     ((t
+       (:family "Helvetica"
+                :width condensed
+                :weight regular
+                :underline nil
+                :box (:line-width (-1 . -2)
+                                  :color "#07273B")))))
+
    '(org-modern-todo
-     ((t (:foreground "#D77070"
-                      :weight bold
-                      :background "#3A2020"
-                      :box (:line-width 1 :color "#D77070")))))
+     ((t
+       (:foreground "#D77070"
+                    :weight bold
+                    :background "#3A2020"
+                    :box (:line-width 1 :color "#D77070")))))
+
+   '(org-modern-done
+     ((t
+       (:foreground "#5FAF5F"
+                    :weight bold
+                    :background "#1F3A1F"
+                    :box (:line-width 1 :color "#5FAF5F")))))
+
+   '(org-modern-priority
+     ((t
+       (:inherit default))))
+
+   '(org-modern-tag
+     ((t
+       (:family "Helvetica"
+                :weight semibold
+                :height 0.9
+                :foreground "#33878F"
+                :background "#0D2224"
+                :box (:line-width 1 :color "#33878F")))))
+
+   '(org-special-keyword ((t (:inherit org-headline-done))))
+
    '(org-modern-todo-faces
      `(("IN PROGRESS"
         :family ,(face-attribute 'default :family nil 'default)
@@ -759,30 +818,125 @@ If `solaire-default-face` is available, use its background; otherwise use the de
                    (if (eq w 'unspecified) 'bold w))
         :foreground "#D4AA00"
         :background "#3A2F00"
-        :box (:line-width 1 :color "#D4AA00"))))
+        :box (:line-width 1 :color "#D4AA00"))))))
 
-   '(org-modern-date-active   ((t (:foreground "#B0C0D0" :background "#1A2A36" :box (:line-width 1 :color "#3A4A5A") :weight normal))))
-   '(org-modern-date-inactive ((t (:foreground "#4a6a7f" :background "#1A2A36" :box (:line-width 1 :color "#2A3A4A") :weight normal))))
-   '(org-modern-done ((t (:foreground "#5FAF5F" :weight bold :background "#1F3A1F" :box (:line-width 1 :color "#5FAF5F")))))
-   '(org-modern-priority ((t (:inherit default))))
-   '(org-modern-tag ((t (:family "Helvetica" :weight semibold :height 0.9 :foreground "#33878F" :background "#0D2224" :box (:line-width 1 :color "#33878F")))))
-   '(org-modern-time-active   ((t (:foreground "#82A0C2" :background "#1A2A36" :box (:line-width 1 :color "#3A4A5A") :weight normal))))
-   '(org-modern-time-inactive ((t (:foreground "#8aa2b2" :background "#1A2A36" :box (:line-width 1 :color "#2A3A4A") :weight normal))))
-   '(org-modern-todo ((t (:foreground "#D77070" :weight bold :background "#3A2020" :box (:line-width 1 :color "#D77070")))))
-   '(org-modern-todo-faces `(("IN PROGRESS" :family ,(face-attribute 'default :family nil 'default) :height ,(let ((h (face-attribute 'org-modern-todo :height nil 'default))) (if (eq h 'unspecified) 1.0 h)) :weight ,(let ((w (face-attribute 'org-modern-todo :weight nil 'default))) (if (eq w 'unspecified) 'bold w)) :foreground "#D4AA00" :background "#3A2F00" :box (:line-width 1 :color "#D4AA00"))))
-   '(org-special-keyword ((t (:inherit org-headline-done))))
-   ))
+(with-eval-after-load 'org
+
+  (defun my-face-defined-by-theme-or-user-p (face)
+    (let* ((theme-spec  (face-spec-set face nil 'theme))
+           (custom-spec (face-spec-set face nil 'custom)))
+      (message "[org-modern debug] %s: theme=%S custom=%S"
+               face theme-spec custom-spec)
+      (or theme-spec custom-spec)))
+
+  (message "[org-modern debug] --- Checking org-modern date/time fallback logic ---")
+
+  ;; DATE ACTIVE
+  (unless (my-face-defined-by-theme-or-user-p 'org-modern-date-active)
+    (message "[org-modern debug] Applying fallback: org-modern-date-active")
+    (custom-set-faces
+     '(org-modern-date-active
+       ((t (:foreground "gray85" :background "gray20"))))))
+
+  ;; DATE INACTIVE
+  (unless (my-face-defined-by-theme-or-user-p 'org-modern-date-inactive)
+    (message "[org-modern debug] Applying fallback: org-modern-date-inactive")
+    (custom-set-faces
+     '(org-modern-date-inactive
+       ((t (:foreground "gray70" :background "gray20"))))))
+
+  ;; TIME ACTIVE
+  (unless (my-face-defined-by-theme-or-user-p 'org-modern-time-active)
+    (message "[org-modern debug] Applying fallback: org-modern-time-active")
+    (custom-set-faces
+     '(org-modern-time-active
+       ((t (:foreground "gray85" :background "gray20"))))))
+
+  ;; TIME INACTIVE
+  (unless (my-face-defined-by-theme-or-user-p 'org-modern-time-inactive)
+    (message "[org-modern debug] Applying fallback: org-modern-time-inactive")
+    (custom-set-faces
+     '(org-modern-time-inactive
+       ((t (:foreground "gray70" :background "gray20")))))))
 
 (advice-add 'groovy-mode :after (lambda (&rest _) (tree-sitter-hl-mode -1)))
 
 
-;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;;                             AIDERMACS
-;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-(setq aidermacs-backend 'vterm
-      aidermacs-default-model "openrouter/minimax/minimax-m2:free"
-      aidermacs-program "aider")
-
-
 (spacemacs/set-leader-keys "op" 'yank-media)
+
+(defun remove-mmd-header-ids ()
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward " \\[[a-z0-9-]+\\]$" nil t)
+      (replace-match ""))))
+;; Use after export:
+;; (add-hook 'org-export-filter-final-output-functions #'remove-mmd-header-ids);; 1) Major/minor mode hook: 0-arg lambda
+(with-eval-after-load 'lsp-ui-doc
+  ;; 1) Major/minor mode hook: 0-arg lambda
+  (add-hook 'lsp-ui-doc-mode-hook
+            (lambda ()
+              ;; ensure face is set (optional if theme already does it)
+              (set-face-background 'lsp-ui-doc-background "#060013")
+              (when-let ((frame (lsp-ui-doc--get-frame)))
+                (set-frame-parameter
+                 frame 'background-color
+                 (face-background 'lsp-ui-doc-background frame t)))))
+
+  ;; 2) Frame *buffer* mode hook: also 0-arg lambda
+  (add-hook 'lsp-ui-doc-frame-mode-hook
+            (lambda ()
+              (when-let ((frame (lsp-ui-doc--get-frame)))
+                (set-frame-parameter
+                 frame 'background-color
+                 (face-background 'lsp-ui-doc-background frame t)))))
+
+  ;; 3) Child-frame creation hook: 2-arg lambda (frame window)
+  (add-hook 'lsp-ui-doc-frame-hook
+            (lambda (frame _window)
+              ;; ensure face is set on that frame (optional)
+              (set-face-background 'lsp-ui-doc-background "#060013" frame)
+              ;; make the child frame background match the face
+              (set-frame-parameter
+               frame 'background-color
+               (face-background 'lsp-ui-doc-background frame t)))))
+
+(defun my/vfc-increase ()
+  (interactive)
+  (setq visual-fill-column-width (+ visual-fill-column-width 5))
+  (when (bound-and-true-p visual-fill-column-mode)
+    (visual-fill-column-adjust)))
+
+(defun my/vfc-decrease ()
+  (interactive)
+  (setq visual-fill-column-width (max 20 (- visual-fill-column-width 5)))
+  (when (bound-and-true-p visual-fill-column-mode)
+    (visual-fill-column-adjust)))
+
+(defhydra my/visual-fill-column-hydra ()
+  "Visual Fill Column"
+  ("[" my/vfc-decrease "decrease")
+  ("]" my/vfc-increase "increase")
+  ("q" nil "quit"))
+
+(setq org-enforce-todo-dependencies t)
+(setq org-hierarchical-todo-statistics nil)
+
+(defun org-summary-todo (n-done n-not-done)
+  (let (org-log-done org-todo-log-states)
+    (org-todo
+     (cond
+      ((= n-not-done 0) "DONE")
+      ((= n-done 0) "TODO")
+      (t "IN PROGRESS")))))
+
+(add-hook 'org-after-todo-statistics-hook #'org-summary-todo)
+
+(with-eval-after-load 'helm-projectile
+  (defun helm-projectile--files-display-real (files root)
+    "Create (DISPLAY . REAL) pairs with FILES and ROOT."
+    (cl-loop for file in files
+             for real = (expand-file-name file root)
+             for file-res = (helm-ff-filter-candidate-one-by-one real t t)
+             for display = (car file-res)
+             collect (cons display real))))

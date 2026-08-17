@@ -1,9 +1,8 @@
+;; -*- lexical-binding: t; -*-
 (setq custom-additional-packages
       '(
-        (aidermacs :variables
-                   aidermacs-default-chat-mode 'architect
-                   aidermacs-default-model "sonnet")
-
+        adaptive-wrap
+        agent-shell
         gradle-mode
         direnv
         exec-path-from-shell

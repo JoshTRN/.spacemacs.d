@@ -1,3 +1,4 @@
+;; -*- lexical-binding: t; -*-
 (setq
  custom-layers
  '(
@@ -18,7 +19,9 @@
    (go :variables
        go-backend 'lsp
        go-tab-width 2)
-   groovy
+   (groovy :variables
+           groovy-backend 'lsp
+           groovy-lsp-jar-path "/Users/joshua/code/groovy-language-server/build/libs/groovy-language-server-all.jar")
    haskell
    (helm :variables helm-position 'top helm-use-posframe t)
    html

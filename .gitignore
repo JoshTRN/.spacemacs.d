@@ -3,3 +3,4 @@
 *.aider.*
 /joshua-xps13.el
 *.elc
+.aider*

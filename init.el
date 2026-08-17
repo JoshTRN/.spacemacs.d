@@ -52,7 +52,7 @@ This function should only modify configuration layer settings."
    dotspacemacs-additional-packages custom-additional-packages
 
    ;; A list of packages that cannot be updated.
-   dotspacemacs-frozen-packages '(posframe)
+   dotspacemacs-frozen-packages '()
 
    ;; A list of packages that will not be installed and loaded.
    dotspacemacs-excluded-packages '()
@@ -160,7 +160,7 @@ It should only modify the values of Spacemacs settings."
    ;; Show numbers before the startup list lines. (default t)
    dotspacemacs-show-startup-list-numbers t
 
-   ;; The minimum delay in seconds between number key presses. (default 0.4)
+   ;; The maximum delay in seconds between number key presses. (default 0.4)
    dotspacemacs-startup-buffer-multi-digit-delay 0.4
 
    ;; If non-nil, show file icons for entries and headings on Spacemacs home buffer.
@@ -194,7 +194,7 @@ It should only modify the values of Spacemacs settings."
    ;; package can be defined with `:package', or a theme can be defined with
    ;; `:location' to download the theme package, refer the themes section in
    ;; DOCUMENTATION.org for the full theme specifications.
-   dotspacemacs-themes '((functional-contrast-ocean :location built-in)
+   dotspacemacs-themes '((functional-contrast-midnight :location built-in)
                          spacemacs-dark
                          spacemacs-light)
 
@@ -205,15 +205,15 @@ It should only modify the values of Spacemacs settings."
    ;; refer to the DOCUMENTATION.org for more info on how to create your own
    ;; spaceline theme. Value can be a symbol or list with additional properties.
    ;; (default '(spacemacs :separator wave :separator-scale 1.5))
-   dotspacemacs-mode-line-theme '(spacemacs :separator wave :separator-scale 1.5)
+   dotspacemacs-mode-line-theme '(spacemacs :separator arrow-fade :separator-scale 1.5)
 
    ;; If non-nil the cursor color matches the state color in GUI Emacs.
    ;; (default t)
    dotspacemacs-colorize-cursor-according-to-state t
 
    ;; Default font or prioritized list of fonts. This setting has no effect when
-   ;; running Emacs in terminal. The font set here will be used for default and
-   ;; fixed-pitch faces. The `:size' can be specified as
+   ;; running Emacs in terminal. The font set here will be used for `default' and
+   ;; `fixed-pitch' faces. The `:size' can be specified as
    ;; a non-negative integer (pixel size), or a floating-point (point size).
    ;; Point size is recommended, because it's device independent. (default 10.0)
    dotspacemacs-default-font '("Fira Code"
@@ -311,6 +311,14 @@ It should only modify the values of Spacemacs settings."
    ;; displayed in the current window. (default nil)
    dotspacemacs-switch-to-buffer-prefers-purpose nil
 
+   ;; Make consecutive tab key presses after commands such as
+   ;; `spacemacs/alternate-buffer' (SPC TAB) cycle through previous
+   ;; buffers/windows/etc. Please see the option's docstring for more information.
+   ;; Set the option to t in order to enable cycling for all current and
+   ;; future cycling commands. Alternatively, choose a subset of the currently
+   ;; supported commands: '(alternate-buffer alternate-window). (default nil)
+   dotspacemacs-enable-cycling nil
+
    ;; Whether side windows (such as those created by treemacs or neotree)
    ;; are kept or minimized by `spacemacs/toggle-maximize-window' (SPC w m).
    ;; (default t)
@@ -322,9 +330,12 @@ It should only modify the values of Spacemacs settings."
    ;; Spacemacs on Windows. Refer the FAQ.org "load-hints" session for details.
    dotspacemacs-enable-load-hints nil
 
-   ;; If t, enable the `package-quickstart' feature to avoid full package
-   ;; loading, otherwise no `package-quickstart' attemption (default nil).
-   ;; Refer the FAQ.org "package-quickstart" section for details.
+   ;; If non-nil, enable the `package-quickstart' feature to avoid activating
+   ;; all package autoloads one by one.
+   ;; Requires building and maintaining a quickstart autoload file for all
+   ;; installed packages.
+   ;; Refer to the FAQ.org "package-quickstart" section for details.
+   ;; (default nil)
    dotspacemacs-enable-package-quickstart nil
 
    ;; If non-nil a progress bar is displayed when spacemacs is loading. This
@@ -427,7 +438,9 @@ It should only modify the values of Spacemacs settings."
 
    ;; If non-nil pressing the closing parenthesis `)' key in insert mode passes
    ;; over any automatically added closing parenthesis, bracket, quote, etc...
-   ;; This can be temporary disabled by pressing `C-q' before `)'. (default nil)
+   ;; This can be temporary disabled by pressing `C-q' before `)'.
+   ;; Only effective when `dotspacemacs-activate-smartparens-mode' is non-nil.
+   ;; Redundant when `smartparens-strict-mode' is enabled. (default nil)
    dotspacemacs-smart-closing-parenthesis nil
 
    ;; Select a scope to highlight delimiters. Possible values are `any',
@@ -456,11 +469,10 @@ It should only modify the values of Spacemacs settings."
    dotspacemacs-search-tools '("rg" "ag" "ack" "grep")
 
    ;; The backend used for undo/redo functionality. Possible values are
-   ;; `undo-fu', `undo-redo' and `undo-tree' see also `evil-undo-system'.
+   ;; `undo-redo', `undo-fu' and `undo-tree' see also `evil-undo-system'.
    ;; Note that saved undo history does not get transferred when changing
-   ;; your undo system. The default is currently `undo-fu' as `undo-tree'
-   ;; is not maintained anymore and `undo-redo' is very basic."
-   dotspacemacs-undo-system 'undo-fu
+   ;; your undo system from or to undo-tree. (default `undo-redo')
+   dotspacemacs-undo-system 'undo-redo
 
    ;; Format specification for setting the frame title.
    ;; %a - the `abbreviated-file-name', or `buffer-name'
@@ -553,19 +565,14 @@ It is mostly for variables that should be set before packages are loaded.
 If you are unsure, try setting them in `dotspacemacs/user-config' first."
   ;; Add my local theme directory so Spacemacs won't try to install it
   (add-to-list 'custom-theme-load-path "/Users/joshua/code/emacs-configurations/themes/")
-  (defun dotspacemacs/user-init ()
-    "Initialization function for user code.
-It is executed immediately after `dotspacemacs/init'."
-    ;; Force Spacemacs to use its pinned Org version, not the built-in one
-    (setq load-prefer-newer t)
-    (setq org-directory (expand-file-name "~/org/"))
-    (setq load-path
-          (delq nil
-                (mapcar (lambda (path)
-                          (unless (string-match-p "lisp/org$" path)
-                            path))
-                        load-path))))
-
+  (setq load-prefer-newer t)
+  (setq org-directory (expand-file-name "~/org/"))
+  (setq load-path
+        (delq nil
+              (mapcar (lambda (path)
+                        (unless (string-match-p "lisp/org$" path)
+                          path))
+                      load-path)))
 
   )
 

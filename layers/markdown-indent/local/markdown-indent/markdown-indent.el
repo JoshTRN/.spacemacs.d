@@ -1,3 +1,5 @@
+;; -*- lexical-binding: t; -*-
+
 ;;; markdown-indent.el --- Indent Markdown files similarly to org-indent
 
 (require 'cl-lib)

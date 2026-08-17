@@ -1,3 +1,5 @@
+;; -*- lexical-binding: t -*-
+
 ;;; packages.el --- markdown-indent layer packages file for Spacemacs
 
 (defconst markdown-indent-packages
