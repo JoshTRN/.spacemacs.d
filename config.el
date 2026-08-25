@@ -11,7 +11,7 @@
       (write-file host-config-file)))
   (find-file host-config-file))
 
-(defun my-correct-symbol-bounds (pretty-alist)
+(defun correct-symbol-bounds (pretty-alist)
   "Prepend a TAB character to each symbol in this alist,
   this way compose-region called by prettify-symbols-mode
   will use the correct width of the symbols
@@ -32,7 +32,7 @@
   (cl-letf (((symbol-function 'y-or-n-p) #'(lambda (prompt) t)))
     (apply orig-fun args)))
 
-(defun my-setup-indent (n)
+(defun setup-indent (n)
   (setq javascript-indent-level n)
   (setq typescript-indent-level n)
   (setq js-indent-level n)
@@ -150,7 +150,7 @@
    '(("^[ \t]*\\([+*-]\\)\\s-" 1 'my/org-bullet prepend))
    'append))
 
-(defun my-org-mode-hook ()
+(defun setup-org-mode ()
   (org-modern-indent-mode)
   (set-face-attribute 'org-document-title nil :height 1.6 :weight 'bold)
   (set-face-attribute 'org-level-1 nil :height 1.4 :weight 'bold)
@@ -215,7 +215,7 @@ Only runs in Org Mode buffers."
    (sql        . t)
    ))
 
-(defun my-org-capture-reset-header-line ()
+(defun reset-org-capture-header-line ()
   "In `org-capture-mode` buffers, keep the default capture header line
 but reset any face remapping applied elsewhere."
   (setq-local face-remapping-alist (assq-delete-all 'header-line face-remapping-alist)))
@@ -234,7 +234,7 @@ but reset any face remapping applied elsewhere."
   ;; commands such as `org-todo' may still be using a match they established
   ;; before making the change that invoked this hook.
   (save-match-data
-    (remove-overlays (point-min) (point-max) 'my-org-inline-pad t)
+    (remove-overlays (point-min) (point-max) 'org-inline-pad t)
     (save-excursion
       (goto-char (point-min))
       ;; Match ~code~ or =verbatim= (doesn't cross newlines)
@@ -242,7 +242,7 @@ but reset any face remapping applied elsewhere."
         (let* ((beg (match-beginning 0))
                (end (match-end 0))
                (ov  (make-overlay beg end)))
-          (overlay-put ov 'my-org-inline-pad t)
+          (overlay-put ov 'org-inline-pad t)
           (overlay-put ov 'face 'org-verbatim) ; keep your face
           ;; add 1 space “padding” on each side, colored like org-verbatim
 
@@ -284,8 +284,8 @@ but reset any face remapping applied elsewhere."
 
 (add-hook 'org-mode-hook #'org-enable-hover-links)
 (add-hook 'org-mode-hook #'org-modern-bullet-coloring)
-(add-hook 'org-capture-mode-hook #'my-org-capture-reset-header-line)
-(add-hook 'org-mode-hook #'my-org-mode-hook)
+(add-hook 'org-capture-mode-hook #'reset-org-capture-header-line)
+(add-hook 'org-mode-hook #'setup-org-mode)
 (add-hook 'org-modern-mode-hook (lambda () (font-lock-flush) (font-lock-ensure)))
 
 (eval-after-load "org"
@@ -438,11 +438,11 @@ but reset any face remapping applied elsewhere."
 (define-key evil-motion-state-map (kbd "<remap> <evil-scroll-down>") 'evil-scroll-down-centered)
 (define-key evil-motion-state-map (kbd "<remap> <evil-scroll-up>") 'evil-scroll-up-centered)
 
-(defun my-yaml-hook ()
+(defun setup-yaml-mode ()
   (spacemacs/toggle-absolute-line-numbers-on)
   (highlight-indentation-mode 1))
 
-(defun my-markdown-mode-hook ()
+(defun setup-markdown-mode ()
   (pretty-print-header)
   (setq global-hl-line-mode nil)
   (markdown-toggle-markup-hiding 1)
@@ -492,10 +492,10 @@ but reset any face remapping applied elsewhere."
 
 (remove-hook 'org-present-mode-hook 'spacemacs//org-present-start)
 
-(add-hook 'markdown-mode-hook #'my-markdown-mode-hook)
+(add-hook 'markdown-mode-hook #'setup-markdown-mode)
 (add-hook 'help-mode-hook #'pretty-print)
 (add-hook 'lsp-help-mode-hook #'pretty-print)
-(add-hook 'yaml-mode-hook #'my-yaml-hook)
+(add-hook 'yaml-mode-hook #'setup-yaml-mode)
 (add-hook 'haskell-mode-hook 'pretty-lambdas-haskell)
 (add-hook 'elm-mode-hook #'pretty-lambdas-haskell)
 (add-hook 'go-mode-hook #'lsp-deferred)
@@ -508,7 +508,7 @@ but reset any face remapping applied elsewhere."
 (define-derived-mode ts-mode typescript-mode "ts"
   "Major mode for editing ts code blocks.")
 
-(my-setup-indent 2)
+(setup-indent 2)
 (helm-ff-icon-mode)
 (spacemacs/toggle-vi-tilde-fringe-off)
 (solaire-global-mode +1)
@@ -689,6 +689,8 @@ but reset any face remapping applied elsewhere."
 
 (spacemacs/declare-prefix "om" "mini-posframe")
 
+(setq mini-posframe-width 140)
+
 (spacemacs/set-leader-keys
   "omr" #'mini-posframe-resize
 
@@ -822,7 +824,7 @@ If `solaire-default-face` is available, use its background; otherwise use the de
 
 (with-eval-after-load 'org
 
-  (defun my-face-defined-by-theme-or-user-p (face)
+  (defun face-defined-by-theme-or-user-p (face)
     (let* ((theme-spec  (face-spec-set face nil 'theme))
            (custom-spec (face-spec-set face nil 'custom)))
       (message "[org-modern debug] %s: theme=%S custom=%S"
@@ -832,35 +834,34 @@ If `solaire-default-face` is available, use its background; otherwise use the de
   (message "[org-modern debug] --- Checking org-modern date/time fallback logic ---")
 
   ;; DATE ACTIVE
-  (unless (my-face-defined-by-theme-or-user-p 'org-modern-date-active)
+  (unless (face-defined-by-theme-or-user-p 'org-modern-date-active)
     (message "[org-modern debug] Applying fallback: org-modern-date-active")
     (custom-set-faces
      '(org-modern-date-active
        ((t (:foreground "gray85" :background "gray20"))))))
 
   ;; DATE INACTIVE
-  (unless (my-face-defined-by-theme-or-user-p 'org-modern-date-inactive)
+  (unless (face-defined-by-theme-or-user-p 'org-modern-date-inactive)
     (message "[org-modern debug] Applying fallback: org-modern-date-inactive")
     (custom-set-faces
      '(org-modern-date-inactive
        ((t (:foreground "gray70" :background "gray20"))))))
 
   ;; TIME ACTIVE
-  (unless (my-face-defined-by-theme-or-user-p 'org-modern-time-active)
+  (unless (face-defined-by-theme-or-user-p 'org-modern-time-active)
     (message "[org-modern debug] Applying fallback: org-modern-time-active")
     (custom-set-faces
      '(org-modern-time-active
        ((t (:foreground "gray85" :background "gray20"))))))
 
   ;; TIME INACTIVE
-  (unless (my-face-defined-by-theme-or-user-p 'org-modern-time-inactive)
+  (unless (face-defined-by-theme-or-user-p 'org-modern-time-inactive)
     (message "[org-modern debug] Applying fallback: org-modern-time-inactive")
     (custom-set-faces
      '(org-modern-time-inactive
        ((t (:foreground "gray70" :background "gray20")))))))
 
 (advice-add 'groovy-mode :after (lambda (&rest _) (tree-sitter-hl-mode -1)))
-
 
 (spacemacs/set-leader-keys "op" 'yank-media)
 
