@@ -975,3 +975,5 @@ If `solaire-default-face` is available, use its background; otherwise use the de
     #'spacemacs/user-vterm-evil-collection-setup)
   (provide 'evil-collection-vterm))
 (provide 'evil-collection-vterm)
+
+(spacemacs/set-leader-keys ":" #'eval-expression)
