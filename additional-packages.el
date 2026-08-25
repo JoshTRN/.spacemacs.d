@@ -34,6 +34,9 @@
         rjsx-mode
         solaire-mode
         tldr
+        (whisper :location (recipe
+                            :fetcher github
+                            :repo "natrys/whisper.el"))
         yasnippet-snippets
         cyberpunk-2019-theme
         ))

@@ -15,13 +15,15 @@
    emacs-lisp
    emoji
    eww
+   functional-contrast-themes
    (git :variables git-enable-magit-delta-plugin t)
    (go :variables
        go-backend 'lsp
        go-tab-width 2)
-   (groovy :variables
-           groovy-backend 'lsp
-           groovy-lsp-jar-path "/Users/joshua/code/groovy-language-server/build/libs/groovy-language-server-all.jar")
+   ;; This is a work layer. Move over to local layer on that machine
+   ;; (groovy :variables
+   ;;         groovy-backend 'lsp
+   ;;         groovy-lsp-jar-path "/Users/joshua/code/groovy-language-server/build/libs/groovy-language-server-all.jar")
    haskell
    (helm :variables helm-position 'top helm-use-posframe t)
    html
@@ -72,6 +74,7 @@
    ruby
    (tree-sitter :variables
                 tree-sitter-langs '(groovy python javascript))
+   tree-sitter-queries
    (typescript :variables
                javascript-backend 'lsp
                typescript-backend 'lsp

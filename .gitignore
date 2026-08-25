@@ -1,6 +1,6 @@
 /.spacemacs.env
-/Joshuas-Laptop.local.el
 *.aider.*
-/joshua-xps13.el
 *.elc
-.aider*
+.agent-shell
+/local/
+/custom-settings.el

@@ -1,0 +1,29 @@
+#+TITLE: tree-sitter-queries layer
+
+* Description
+Keeps my own tree-sitter highlighting queries applied.
+
+=tree-sitter-langs-install-grammars= downloads a bundle and unpacks it over the
+package's own =queries/= directory, so any edit made there is overwritten on
+every grammar update. This layer stores the queries it cares about and copies
+them back afterwards.
+
+* Install
+Add =tree-sitter-queries= to =custom-layers= in =layers.el=. It needs the
+built-in =tree-sitter= layer, which owns the =tree-sitter-langs= package.
+
+* Usage
+Automatic: =tree-sitter-langs-install-grammars= is advised =:after=, so
+reinstalling grammars re-applies these queries with no extra step.
+
+Manual: =M-x tree-sitter-install-custom-queries=. Needed after the
+=tree-sitter-langs= *package* updates, since that installs a fresh
+version-stamped directory without going through =install-grammars=.
+
+* Configuration
+=tree-sitter-custom-query-langs= selects which languages are overridden.
+Currently =("java")=.
+
+=queries/= also holds elm and haskell, which are *not* applied: elm was merged
+upstream, and the haskell queries no longer fit upstream's grammar. They are
+kept for reference; add the name to the list to turn one back on.

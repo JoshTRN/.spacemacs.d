@@ -1,0 +1,29 @@
+#+TITLE: functional-contrast-themes layer
+
+* Description
+Carries my hand-written themes as plain files, so they travel with this repo
+instead of living in a separate checkout that every machine has to clone.
+
+- =functional-contrast-midnight= (the default in =dotspacemacs-themes=)
+- =functional-contrast-ocean=
+- =functional-contrast-forest-night=
+
+Two third-party themes ride along in =themes/=, with their original headers
+intact: =github-dark= (ladroid) and =obscurii= (ported from a VS Code theme).
+
+* Install
+Add =functional-contrast-themes= to =custom-layers= in =layers.el=.
+
+* Note on load order
+This layer does *not* register =custom-theme-load-path= for the startup theme,
+and cannot. Spacemacs applies =dotspacemacs-themes= inside =spacemacs/init=
+(=spacemacs/load-default-theme=), while layers are loaded afterwards from
+=~/.emacs.d/init.el=. So the authoritative registration lives in
+=dotspacemacs/user-init= in =init.el=, which runs early enough.
+
+This layer's =config.el= adds the same path again. That is deliberate but
+secondary: it keeps theme cycling (=SPC T n=) and runtime =load-theme= working,
+and =add-to-list= makes the duplicate a no-op.
+
+If a theme ever fails to load at startup but works after =SPC T n=, the
+=user-init= registration is what broke.

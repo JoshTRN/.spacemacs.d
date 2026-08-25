@@ -1,14 +1,73 @@
 ;; -*- mode: emacs-lisp; lexical-binding: t -*-
 ;; This file is loaded by Spacemacs at startup.
 ;; It must be stored in your home directory.
+(add-to-list 'load-path
+             (expand-file-name "~/.emacs.d/site-lisp/org-mode/lisp"))
+(defvar spacemacs-local-directory
+  (expand-file-name "local/" dotspacemacs-directory)
+  "Directory holding this machine's private configuration.
+It is a separate git repository (personal or work) cloned to this path and
+gitignored by the shared config, so nothing in it reaches the public repo.
+Everything it provides is optional: a machine without this clone boots on the
+shared config alone.")
 
 (defvar host-config-file
   (expand-file-name (concat system-name ".el")
-                    dotspacemacs-directory)
-  "Path to this host's Spacemacs config file.")
+                    spacemacs-local-directory)
+  "Path to this host's Spacemacs config file.
+Loaded at the end of `dotspacemacs/user-config'.")
+
+(defvar host-layers-file
+  (expand-file-name (concat system-name "-layers.el")
+                    spacemacs-local-directory)
+  "Path to this host's layer overrides.
+Loaded before `dotspacemacs/layers' so it can modify `custom-layers'.")
+
+(defun spacemacs-local-directory-check ()
+  "Warn in the Spacemacs buffer when the private config repo is not cloned.
+
+Deliberately non-blocking: every file under `spacemacs-local-directory' is
+loaded behind a `file-exists-p' guard, so Emacs comes up fine on the shared
+config alone -- this only makes the absence visible instead of silent.
+
+Called from `dotspacemacs/user-config', which `emacs-startup-hook' runs before
+`spacemacs-buffer//startup-hook' renders the warning list, so the message
+reaches the startup buffer."
+  (when (and (not (file-directory-p spacemacs-local-directory))
+             (fboundp 'spacemacs-buffer/warning))
+    (spacemacs-buffer/warning
+     (concat "No private config directory at %s -- host config (%s.el), "
+             "host layers (%s-layers.el) and any private layers were skipped. "
+             "Clone the personal or work repo there to restore them.")
+     spacemacs-local-directory system-name system-name)))
+
+(defun magit-delta-executable-check ()
+  "Warn in the Spacemacs buffer when magit-delta is on but `delta' is missing.
+
+The git layer sets `git-enable-magit-delta-plugin', which hooks
+`magit-delta-mode' into every magit buffer.  That hook shells out to the
+external `delta' binary (the git-delta package) -- an Emacs package install
+does not bring it along.  When the binary is absent magit still opens but its
+diffs render wrong, which looks like a magit bug rather than a missing
+dependency.  Hence this check.
+
+Non-blocking, like `spacemacs-local-directory-check'."
+  (when (and (bound-and-true-p git-enable-magit-delta-plugin)
+             (not (executable-find (if (boundp 'magit-delta-delta-executable)
+                                       magit-delta-delta-executable
+                                     "delta")))
+             (fboundp 'spacemacs-buffer/warning))
+    (spacemacs-buffer/warning
+     (concat "magit-delta is enabled but the `delta' binary is not on PATH -- "
+             "magit diffs will not render correctly until it is installed. "
+             "Install the git-delta package, or set "
+             "git-enable-magit-delta-plugin to nil in layers.el."))))
 
 (load (expand-file-name "additional-packages.el" dotspacemacs-directory))
 (load (expand-file-name "layers.el" dotspacemacs-directory))
+
+(when (file-exists-p host-layers-file)
+  (load host-layers-file))
 
 (defun dotspacemacs/layers ()
   "Layer configuration:
@@ -36,7 +95,10 @@ This function should only modify configuration layer settings."
 
    ;; List of additional paths where to look for configuration layers.
    ;; Paths must have a trailing slash (i.e. "~/.mycontribs/")
-   dotspacemacs-configuration-layer-path '("~/.spacemacs.d/layers/")
+   dotspacemacs-configuration-layer-path
+   (seq-filter #'file-directory-p
+               (list (expand-file-name "layers/" dotspacemacs-directory)
+                     (expand-file-name "layers/" spacemacs-local-directory)))
 
    ;; List of configuration layers to load.
    dotspacemacs-configuration-layers custom-layers
@@ -563,8 +625,20 @@ This function is called immediately after `dotspacemacs/init', before layer
 configuration.
 It is mostly for variables that should be set before packages are loaded.
 If you are unsure, try setting them in `dotspacemacs/user-config' first."
-  ;; Add my local theme directory so Spacemacs won't try to install it
-  (add-to-list 'custom-theme-load-path "/Users/joshua/code/emacs-configurations/themes/")
+  ;; Add my local theme directory so Spacemacs won't try to install it.
+  ;; Lives in the functional-contrast-themes layer, but must be registered here:
+  ;; `spacemacs/load-default-theme' runs inside `spacemacs/init', before layers
+  ;; are loaded at all, so the layer's own config.el would be too late.
+  (let ((themes (expand-file-name "layers/functional-contrast-themes/themes/" dotspacemacs-directory)))
+    (when (file-directory-p themes)
+      (add-to-list 'custom-theme-load-path themes)))
+  ;; Claiming `custom-file' stops Spacemacs from writing customize output back
+  ;; into this file. core-custom-settings.el only installs that sync advice
+  ;; when `custom-file' is still nil at startup (it then points at
+  ;; ~/.emacs.d/.cache/.custom-settings and mirrors it into
+  ;; `dotspacemacs/emacs-custom-settings' here). Setting it ourselves opts out.
+  ;; Spacemacs never loads `custom-file' itself -- user-config does that below.
+  (setq custom-file (expand-file-name "custom-settings.el" dotspacemacs-directory))
   (setq load-prefer-newer t)
   (setq org-directory (expand-file-name "~/org/"))
   (setq load-path
@@ -582,6 +656,9 @@ This function is called at the very end of Spacemacs startup, after layer
 configuration.
 Put your configuration code here, except for variables that should be set
 before packages are loaded."
+  (spacemacs-local-directory-check)
+  (magit-delta-executable-check)
+
   (let ((os-file (expand-file-name
                   (concat "os/" (symbol-name system-type) ".el")
                   dotspacemacs-directory)))
@@ -593,130 +670,6 @@ before packages are loaded."
 
   (load (expand-file-name "config.el" dotspacemacs-directory))
 
+  ;; Where `dotspacemacs/emacs-custom-settings' used to be called from.
+  (load custom-file t)
   )
-
-
-;; Do not write anything past this comment. This is where Emacs will
-;; auto-generate custom variable definitions.
-(defun dotspacemacs/emacs-custom-settings ()
-  "Emacs custom settings.
-This is an auto-generated function, do not modify its content directly, use
-Emacs customize menu instead.
-This function is called at the very end of Spacemacs initialization."
-(custom-set-variables
- ;; custom-set-variables was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(custom-safe-themes
-   '("272461f4064d228ab41e9c9785540948627e6fb74f2dcff5ee063537c86fbad6" default))
- '(package-selected-packages
-   '(ace-link add-node-modules-path afternoon-theme aggressive-indent aider
-              alect-themes all-the-icons ample-theme ample-zen-theme
-              anti-zenburn-theme apropospriate-theme attrap auto-compile
-              auto-highlight-symbol auto-yasnippet avy-jump-helm-line
-              badwolf-theme birds-of-paradise-plus-theme bmx-mode
-              browse-at-remote bubbleberry-theme bundler busybee-theme
-              centered-cursor-mode cherry-blossom-theme chocolate-theme cider
-              cider-decompile cider-eval-sexp-fu clean-aindent-mode clojure-mode
-              clojure-snippets clues-theme cmm-mode code-cells code-review
-              color-theme-sanityinc-solarized color-theme-sanityinc-tomorrow
-              column-enforce-mode company-cabal company-emoji
-              company-nixos-options company-shell company-terraform company-web
-              csv-mode cyberpunk-2019-theme cyberpunk-theme cython-mode
-              dactyl-mode dakrone-theme dante darkmine-theme darkokai-theme
-              darktooth-theme define-word devdocs diff-hl diminish
-              dired-quick-sort direnv dirvish disable-mouse django-theme docker
-              dockerfile-mode doom-themes dotenv-mode dracula-theme drag-stuff
-              dumb-jump eaf eat edit-indirect ef-themes elisp-def elisp-demos
-              elisp-slime-nav ellama elm-mode elm-test-runner
-              emacs-addiction-mode emmet-mode emoji-cheat-sheet-plus emr
-              engine-mode esh-help eshell-prompt-extras eshell-z espresso-theme
-              eval-sexp-fu evil-anzu evil-args evil-cleverparens evil-collection
-              evil-easymotion evil-escape evil-evilified-state evil-exchange
-              evil-goggles evil-iedit-state evil-indent-plus evil-lion
-              evil-lisp-state evil-matchit evil-mc evil-nerd-commenter
-              evil-numbers evil-org evil-surround evil-textobj-line evil-tutor
-              evil-unimpaired evil-visual-mark-mode evil-visualstar
-              exec-path-from-shell exotica-theme expand-region eyebrowse
-              eziam-themes fancy-battery farmhouse-themes fish-mode
-              flatland-theme flatui-theme flycheck-bashate flycheck-elm
-              flycheck-elsa flycheck-haskell flycheck-kotlin flycheck-package
-              flycheck-pos-tip flyspell-correct-helm gandalf-theme gh-md
-              git-link git-messenger git-modes git-timemachine
-              gitignore-templates gnuplot go-eldoc go-fill-struct go-gen-test
-              go-guru go-impl go-rename go-tag godoctor golden-ratio
-              google-translate gotham-theme gptel gradle-mode grandshell-theme
-              groovy-imports groovy-mode gruber-darker-theme gruvbox-theme
-              haskell-snippets hc-zenburn-theme helm-ag helm-c-yasnippet
-              helm-cider helm-comint helm-company helm-css-scss helm-descbinds
-              helm-hoogle helm-ls-git helm-lsp helm-make helm-mode-manager
-              helm-nixos-options helm-org helm-org-rifle helm-posframe
-              helm-projectile helm-purpose helm-pydoc helm-swoop helm-xref
-              hemisu-theme heroku-theme hide-comnt highlight-indentation
-              highlight-numbers highlight-parentheses hl-todo hlint-refactor
-              holy-mode hungry-delete hybrid-mode impatient-mode indent-guide
-              indium info+ inkpot-theme insert-shebang inspector ir-black-theme
-              jazz-theme jbeans-theme journalctl-mode js-comint js-doc json-mode
-              json-navigator json-reformat kaolin-themes kotlin-mode
-              kubernetes-evil ligature light-soap-theme link-hint live-py-mode
-              livid-mode lorem-ipsum lsp-haskell lsp-java lsp-metals lsp-origami
-              lsp-pyright lsp-ui lua-mode lush-theme macrostep madhat2r-theme
-              magit-delta markdown-toc material-theme maven-test-mode
-              minimal-theme minitest modus-themes moe-theme molokai-theme
-              monochrome-theme monokai-theme multi-line multi-term multi-vterm
-              mustang-theme mvn mwim nameless naquadah-theme nginx-mode nix-mode
-              noctilux-theme nodejs-repl npm-mode ob-http ob-kubectl ob-mermaid
-              ob-powershell ob-rust obsidian-theme occidental-theme
-              oldlace-theme omtose-phellack-themes open-junk-file org-appear
-              org-cliplink org-contrib org-download org-fancy-priorities
-              org-journal org-mime org-modern org-modern-indent org-pomodoro
-              org-present org-projectile org-rich-yank org-roam-ui
-              org-super-agenda org-superstar org-transclusion
-              organic-green-theme orgit-forge overseer ox-epub ox-pandoc
-              ox-timeline page-break-lines pandoc-mode paradox parseclj parseedn
-              password-generator pdf-view-restore pet phoenix-dark-mono-theme
-              phoenix-dark-pink-theme pip-requirements pipenv pippel
-              planet-theme poetry popwin powershell prettier-js
-              professional-theme pug-mode purple-haze-theme py-isort pydoc
-              pyenv-mode pylookup python-pytest quelpa queue quickrun
-              railscasts-theme rainbow-delimiters rake ready-player realgud
-              rebecca-theme restart-emacs reverse-theme rjsx-mode ron-mode
-              rspec-mode rubocop rubocopfmt ruby-hash-syntax ruby-refactor
-              ruby-test-mode ruby-tools rustic sass-mode sbt-mode scala-mode
-              scss-mode sesman seti-theme shell-pop shfmt slack slim-mode
-              smeargle smyx-theme soft-charcoal-theme soft-morning-theme
-              soft-stone-theme solaire-mode solarized-theme soothe-theme
-              space-doc spacegray-theme spaceline spacemacs-purpose-popwin
-              spacemacs-whitespace-cleanup sphinx-doc sql-indent
-              string-edit-at-point string-inflection subatomic-theme
-              subatomic256-theme sublime-themes sunny-day-theme symbol-overlay
-              symon systemd tagedit tango-2-theme tango-plus-theme
-              tangotango-theme tao-theme term-cursor terminal-here texfrag tldr
-              toc-org toml-mode toxi-theme tree-sitter-langs treemacs-evil
-              treemacs-icons-dired treemacs-magit treemacs-persp
-              treemacs-projectile twilight-anti-bright-theme
-              twilight-bright-theme twilight-theme typescript-mode ujelly-theme
-              underwater-theme undo-fu undo-fu-session unfill unicode-fonts
-              valign verb vi-tilde-fringe vimrc-mode volatile-highlights vundo
-              web-beautify web-mode wgrep which-key-posframe white-sand-theme
-              winum writeroom-mode ws-butler yaml-mode yapfify
-              yasnippet-snippets zen-and-art-theme zenburn-theme zonokai-emacs))
- '(safe-local-variable-values
-   '((eval and buffer-file-name (not (eq major-mode 'package-recipe-mode))
-           (or (require 'package-recipe-mode nil t)
-               (let ((load-path (cons "../package-build" load-path)))
-                 (require 'package-recipe-mode nil t)))
-           (package-recipe-mode))
-     (typescript-backend . tide) (typescript-backend . lsp)
-     (javascript-backend . tide) (javascript-backend . tern)
-     (javascript-backend . lsp))))
-(custom-set-faces
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(org-agenda-block-separator ((t (:foreground "#3A4A5A"))))
- '(org-modern-todo ((t (:foreground "#D77070" :weight bold :background "#3A2020" :box (:line-width 1 :color "#D77070")))))
- '(org-modern-todo-faces `(("IN PROGRESS" :family ,(face-attribute 'default :family nil 'default) :height ,(let ((h (face-attribute 'org-modern-todo :height nil 'default))) (if (eq h 'unspecified) 1.0 h)) :weight ,(let ((w (face-attribute 'org-modern-todo :weight nil 'default))) (if (eq w 'unspecified) 'bold w)) :foreground "#D4AA00" :background "#3A2F00" :box (:line-width 1 :color "#D4AA00")))))
-)
