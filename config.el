@@ -484,11 +484,17 @@ but reset any face remapping applied elsewhere."
 (add-to-list 'auto-mode-alist '("\\.tsx\\'" . typescript-tsx-mode))
 (add-to-list 'auto-mode-alist '("\\.js\\'" . typescript-mode))
 (add-to-list 'auto-mode-alist '("\\.jsx\\'" . typescript-tsx-mode))
-(add-to-list 'custom-theme-load-path "~/code/emacs-configurations/themes")
 
-(require 'dap-node)
-(require 'dap-chrome)
-(require 'dap-firefox)
+;; On Emacs 31 these die with "Invalid face box: :color, unspecified,
+;; :line-width, (-1 . -1)" -- dap-mouse.el and dap-overlays.el declare
+;; `:box (:line-width -1 :color ...)' faces that no longer validate. The
+;; signal propagates out of `require' and out of `load', so everything below
+;; this point in config.el silently never ran. Demote it to a message: dap
+;; stays half-loaded either way, but the rest of the file survives.
+(with-demoted-errors "dap require failed: %S"
+  (require 'dap-node)
+  (require 'dap-chrome)
+  (require 'dap-firefox))
 
 (remove-hook 'org-present-mode-hook 'spacemacs//org-present-start)
 
@@ -510,7 +516,11 @@ but reset any face remapping applied elsewhere."
 
 (setup-indent 2)
 (helm-ff-icon-mode)
-(spacemacs/toggle-vi-tilde-fringe-off)
+;; The toggle is defined inside the layer's own `do-after-display-system-init',
+;; so under `emacs --daemon' it does not exist yet when user-config runs and
+;; calling it here aborts the rest of this file. Defer on the same signal.
+(spacemacs|do-after-display-system-init
+  (spacemacs/toggle-vi-tilde-fringe-off))
 (solaire-global-mode +1)
 (pixel-scroll-precision-mode)
 (make-variable-buffer-local 'global-hl-line-mode)
@@ -585,7 +595,6 @@ but reset any face remapping applied elsewhere."
            markdown-block-type-faces)))
 
 (add-hook 'markdown-mode-hook 'set-markdown-block-faces)
-(markdown-indent-mode 1)
 
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

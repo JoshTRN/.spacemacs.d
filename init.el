@@ -257,6 +257,7 @@ It should only modify the values of Spacemacs settings."
    ;; `:location' to download the theme package, refer the themes section in
    ;; DOCUMENTATION.org for the full theme specifications.
    dotspacemacs-themes '((functional-contrast-midnight :location built-in)
+                         (functional-contrast-dragonized :location built-in)
                          spacemacs-dark
                          spacemacs-light)
 
@@ -279,7 +280,7 @@ It should only modify the values of Spacemacs settings."
    ;; a non-negative integer (pixel size), or a floating-point (point size).
    ;; Point size is recommended, because it's device independent. (default 10.0)
    dotspacemacs-default-font '("Fira Code"
-                               :size 15.0
+                               :size 12.0
                                :weight normal
                                :width normal)
 
