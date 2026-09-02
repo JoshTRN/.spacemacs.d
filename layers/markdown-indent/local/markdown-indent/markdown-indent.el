@@ -2,7 +2,25 @@
 
 ;;; markdown-indent.el --- Indent Markdown files similarly to org-indent
 
-(require 'cl-lib)
+;;; Commentary:
+
+;; Virtual indentation for `markdown-mode', in the spirit of `org-indent'.
+;;
+;; Indentation is applied lazily through `jit-lock', so only the text that is
+;; actually displayed is ever measured.  Opening a large file costs nothing,
+;; there is no background agent walking the buffer, and prefix strings are
+;; computed once and shared between every line that needs them.
+;;
+;; Edits are repaired as they happen: ordinary insertions re-indent the lines
+;; they touch, and a change to a heading re-indents everything down to the
+;; next heading, which is exactly the span whose level that heading governs.
+
+;;; Code:
+
+(require 'jit-lock)
+
+;; Defined by `define-minor-mode' at the end of this file.
+(defvar markdown-indent-mode)
 
 (defgroup markdown-indent nil
   "Options concerning dynamic virtual indentation for Markdown."
@@ -12,226 +30,243 @@
 (defcustom markdown-indent-boundary-char ?\s
   "Character used at the boundary of the virtual indentation."
   :group 'markdown-indent
-  :type 'character)
+  :type 'character
+  :initialize #'custom-initialize-default
+  :set #'markdown-indent--set-option)
 
 (defcustom markdown-indent-indentation-per-level 2
   "Indentation (in number of characters) per heading level."
   :group 'markdown-indent
-  :type 'integer)
+  :type 'integer
+  :initialize #'custom-initialize-default
+  :set #'markdown-indent--set-option)
 
 (defcustom markdown-indent-mode-turns-off-electric-indent t
   "If non-nil, disabling electric indent when `markdown-indent-mode' is on."
   :group 'markdown-indent
   :type 'boolean)
 
-(defcustom markdown-indent-post-buffer-init-functions nil
-  "Hook run after `markdown-indent-mode' finishes initializing a buffer.
-Each function must accept a single argument, the initialized buffer."
-  :group 'markdown-indent
-  :type 'hook)
-
 (defface markdown-indent
   '((t (:inherit shadow)))
   "Face for Markdown indentation."
   :group 'markdown-faces)
 
-(defvar markdown-indent--initial-marker nil
-  "Position of initialization before interruption.")
-
-(defvar markdown-indent-agent-timer nil
-  "Timer for background indentation process.")
-
-(defvar markdown-indent-agentized-buffers nil
-  "List of buffers awaiting background indentation.")
-
-(defvar markdown-indent-agent-resume-timer nil
-  "Timer to resume indentation after yielding to other idle timers.")
-
-(defvar markdown-indent-agent-active-delay '(0 2 0)
-  "Time to run indentation aggressively if the buffer is current.")
-
-(defvar markdown-indent-agent-passive-delay '(0 0 400000)
-  "Time to run indentation passively if the buffer is not current.")
-
-(defvar markdown-indent-agent-resume-delay '(0 0 100000)
-  "Minimal time for other idle processes before resuming indentation.")
-
 (defconst markdown-indent--deepest-level 50
   "Maximum Markdown heading depth to consider.")
 
-(defvar markdown-indent--heading-line-prefixes nil
-  "Vector of prefix strings for heading lines.")
+(defconst markdown-indent--max-cached-indentation 200
+  "Largest line indentation for which prefixes are cached.")
 
-(defvar markdown-indent--text-line-prefixes nil
-  "Vector of prefix strings for normal lines.")
+(defconst markdown-indent--heading-re "^\\(#+\\)[ \t]"
+  "Regexp matching a heading line.  Group 1 is the leading hashes.")
 
-(defvar markdown-indent--modified-headline-flag nil
-  "Non-nil if a heading was just modified or deleted.")
+(defconst markdown-indent--line-re
+  "^\\(?:\\(#+\\)[ \t]\\|[ \t]*\\(?:[-+*]\\|[0-9]+[.)]\\)[ \t]+\\)"
+  "Regexp matching a heading or a list item at the beginning of a line.
+Group 1 matches for headings only; when it is nil the whole match
+covers the list bullet, so its end is the body column.")
 
-(defun markdown-indent--heading-level ()
-  "Return the level of the Markdown heading at point, or nil if none."
-  (save-excursion
-    (beginning-of-line)
-    (when (looking-at "^\\(#+\\)\\s-+")
-      (length (match-string 1)))))
+(defvar markdown-indent--heading-prefixes nil
+  "Vector of prefix strings for heading lines, indexed by level.")
 
-(defun markdown-indent--is-list-item-p ()
-  "Return non-nil if point is at a Markdown list item."
-  (save-excursion
-    (beginning-of-line)
-    (looking-at "^\\s-*\\([-+*]\\|[0-9]+[.)]\\)\\s-+")))
+(defvar markdown-indent--text-prefixes nil
+  "Vector of prefix strings for normal lines, indexed by level.")
 
-(defun markdown-indent--list-item-body-column ()
-  "Return the column where list item body begins, or nil if not a list."
-  (save-excursion
-    (beginning-of-line)
-    (when (looking-at "^\\s-*\\([-+*]\\|[0-9]+[.)]\\)\\s-+")
-      (goto-char (match-end 0))
-      (current-column))))
+(defvar markdown-indent--prefix-cache (make-hash-table :test #'eql)
+  "Cache of ready-made `line-prefix'/`wrap-prefix' property lists.")
+
+(defvar-local markdown-indent--heading-changed nil
+  "Non-nil when a heading line is about to be, or has just been, modified.")
+
+
+;;; Prefix strings
 
 (defun markdown-indent--compute-prefixes ()
-  "Compute prefix strings for text and heading lines."
-  (setq markdown-indent--heading-line-prefixes
+  "Compute the prefix strings for text and heading lines."
+  (setq markdown-indent--heading-prefixes
         (make-vector markdown-indent--deepest-level nil)
-        markdown-indent--text-line-prefixes
+        markdown-indent--text-prefixes
         (make-vector markdown-indent--deepest-level nil))
+  (clrhash markdown-indent--prefix-cache)
   (dotimes (n markdown-indent--deepest-level)
-    (let ((indent (* (max 0 (1- n)) markdown-indent-indentation-per-level)))
-      (aset markdown-indent--heading-line-prefixes n
-            (propertize (make-string indent ?\s) 'face 'markdown-indent))
-      (aset markdown-indent--text-line-prefixes n
-            (propertize
-             (concat (make-string (* n markdown-indent-indentation-per-level) ?\s)
-                     (char-to-string markdown-indent-boundary-char))
-             'face 'markdown-indent)))))
+    (aset markdown-indent--heading-prefixes n
+          (propertize (make-string (* (max 0 (1- n))
+                                      markdown-indent-indentation-per-level)
+                                   ?\s)
+                      'face 'markdown-indent))
+    (aset markdown-indent--text-prefixes n
+          (propertize
+           (concat (make-string (* n markdown-indent-indentation-per-level) ?\s)
+                   (char-to-string markdown-indent-boundary-char))
+           'face 'markdown-indent))))
+
+(defun markdown-indent--set-option (symbol value)
+  "Set SYMBOL to VALUE, then re-indent every buffer using the mode."
+  (set-default symbol value)
+  (when (and (boundp 'markdown-indent-boundary-char)
+             (boundp 'markdown-indent-indentation-per-level))
+    (markdown-indent--compute-prefixes)
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (bound-and-true-p markdown-indent-mode)
+          (markdown-indent-remove-properties (point-min) (point-max))
+          (jit-lock-refontify))))))
+
+(defsubst markdown-indent--cache-key (level indentation heading)
+  "Return the cache key for LEVEL, INDENTATION and HEADING."
+  (+ (* (+ (* level 2) (if heading 1 0))
+        markdown-indent--max-cached-indentation)
+     indentation))
+
+(defun markdown-indent--prefix-props (level indentation heading)
+  "Return a property list indenting a line at LEVEL by INDENTATION.
+HEADING, if non-nil, indicates the line is a heading.  The list is
+shared between all lines of the same shape, so applying it costs no
+allocation at all."
+  (let* ((level (min level (1- markdown-indent--deepest-level)))
+         (indentation (max 0 indentation))
+         (cacheable (< indentation markdown-indent--max-cached-indentation))
+         (key (and cacheable
+                   (markdown-indent--cache-key level indentation heading))))
+    (or (and cacheable (gethash key markdown-indent--prefix-cache))
+        (let* ((base (aref (if heading
+                               markdown-indent--heading-prefixes
+                             markdown-indent--text-prefixes)
+                           level))
+               (props (list 'line-prefix base
+                            'wrap-prefix
+                            (if (zerop indentation)
+                                base
+                              (propertize
+                               (concat base (make-string indentation ?\s))
+                               'face 'markdown-indent)))))
+          (when cacheable
+            (puthash key props markdown-indent--prefix-cache))
+          props))))
+
+
+;;; Applying indentation
 
 (defun markdown-indent-remove-properties (beg end)
   "Remove indentation properties between BEG and END."
   (with-silent-modifications
     (remove-text-properties beg end '(line-prefix nil wrap-prefix nil))))
 
-(defun markdown-indent-remove-properties-from-string (string)
-  "Remove indentation properties from STRING."
-  (remove-text-properties 0 (length string)
-                          '(line-prefix nil wrap-prefix nil)
-                          string)
-  string)
+(defun markdown-indent--enclosing-level (pos)
+  "Return the heading level in effect on the line before POS, or 0."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char pos)
+      (forward-line 0)
+      (if (re-search-backward markdown-indent--heading-re nil t)
+          (min (- (match-end 1) (match-beginning 1))
+               (1- markdown-indent--deepest-level))
+        0))))
 
-(defun markdown-indent-set-line-properties (level indentation &optional heading)
-  "Set prefix properties on current line, then move to next.
-LEVEL is heading depth, 0 for body text.
-INDENTATION is indentation for wrapping text.
-HEADING, if non-nil, indicates current line is a heading."
-  (let* ((base (if heading
-                   (aref markdown-indent--heading-line-prefixes level)
-                 (aref markdown-indent--text-line-prefixes level)))
-         (wrap (propertize (concat base (make-string indentation ?\s))
-                           'face 'markdown-indent)))
-    (add-text-properties
-     (line-beginning-position) (line-beginning-position 2)
-     `(line-prefix ,base wrap-prefix ,wrap)))
-  (forward-line))
-
-(defun markdown-indent-add-properties (beg end &optional delay)
-  "Add indentation properties between BEG and END.
-If DELAY is non-nil, yield after that duration."
+(defun markdown-indent--apply (start end)
+  "Indent every line overlapping START to END.
+Return the region actually covered as a cons cell.  Runs of lines
+sharing the same prefixes are propertized in a single pass."
   (save-match-data
     (save-excursion
-      (goto-char beg)
+      (goto-char start)
       (forward-line 0)
-      (let ((level (or (markdown-indent--heading-level) 0))
-            (time-limit (and delay (time-add nil delay))))
+      (let* ((beg (point))
+             (limit (progn (goto-char end)
+                           (if (bolp) (point) (line-beginning-position 2))))
+             (level (markdown-indent--enclosing-level beg))
+             (run-beg beg)
+             (run-props nil))
+        (goto-char beg)
         (with-silent-modifications
-          (while (and (<= (point) end) (not (eobp)))
-            (cond
-             ((and delay (input-pending-p))
-              (throw 'interrupt (point)))
-             ((and delay (time-less-p time-limit nil))
-              (setq markdown-indent-agent-resume-timer
-                    (run-with-idle-timer
-                     (time-add (current-idle-time) markdown-indent-agent-resume-delay)
-                     nil #'markdown-indent-initialize-agent))
-              (throw 'interrupt (point)))
-             (t
+          (while (< (point) limit)
+            (let ((bol (point))
+                  (props nil))
               (cond
-               ((markdown-indent--heading-level)
-                (setq level (markdown-indent--heading-level))
-                (markdown-indent-set-line-properties level 0 'heading))
-               ((markdown-indent--is-list-item-p)
-                (markdown-indent-set-line-properties
-                 level
-                 (or (markdown-indent--list-item-body-column)
-                     (current-indentation))))
+               ((looking-at markdown-indent--line-re)
+                (if (match-beginning 1)
+                    (setq level (min (- (match-end 1) (match-beginning 1))
+                                     (1- markdown-indent--deepest-level))
+                          props (markdown-indent--prefix-props level 0 t))
+                  ;; List item: wrapped text lines up with the item body.
+                  (goto-char (match-end 0))
+                  (setq props (markdown-indent--prefix-props
+                               level (current-column) nil))))
                (t
-                (markdown-indent-set-line-properties
-                 level
-                 (current-indentation))))))))))))
+                (setq props (markdown-indent--prefix-props
+                             level (current-indentation) nil))))
+              (unless (eq props run-props)
+                (when run-props
+                  (add-text-properties run-beg bol run-props))
+                (setq run-beg bol
+                      run-props props))
+              (goto-char bol)
+              (forward-line 1)))
+          (when run-props
+            (add-text-properties run-beg (point) run-props)))
+        (cons beg (point))))))
 
-(defun markdown-indent-notify-modified-headline (beg end)
-  "Notify that a heading may have been modified in the region BEG to END."
-  (when (derived-mode-p 'markdown-mode)
-    (save-excursion
-      (goto-char beg)
-      (setq markdown-indent--modified-headline-flag
-            (or (markdown-indent--heading-level)
-                (re-search-forward "^\\(#+\\)\\s-+" end t))))))
+(defun markdown-indent--jit-lock (start end)
+  "Indent the lines between START and END on behalf of `jit-lock'."
+  (let ((bounds (markdown-indent--apply start end)))
+    `(jit-lock-bounds ,(car bounds) . ,(cdr bounds))))
 
-(defun markdown-indent-refresh-maybe (beg end _ignored)
-  "Refresh indentation in the region BEG to END if needed.
-Fixes loss of indentation on newly inserted lines by reapplying
-line-prefix properties from the beginning to end line boundaries."
-  (when (and (boundp 'markdown-indent-mode) markdown-indent-mode)
+
+;;; Keeping up with edits
+
+(defun markdown-indent--heading-in-region-p (beg end)
+  "Return non-nil if any line touched by BEG to END is a heading."
+  (save-excursion
     (save-match-data
-      (save-excursion
-        (let ((start (save-excursion
-                       (goto-char beg)
-                       (line-beginning-position)))
-              (finish (save-excursion
-                        (goto-char end)
-                        (line-beginning-position 2)))))
-        (if markdown-indent--modified-headline-flag
-            (progn
-              (setq markdown-indent--modified-headline-flag nil)
-              (markdown-indent-remove-properties start finish)
-              (markdown-indent-add-properties start finish))
-          (markdown-indent-remove-properties start finish)
-          (markdown-indent-add-properties start finish))))))
-
-(defun markdown-indent-initialize-agent ()
-  "Resume or initiate indentation for any buffers in queue."
-  (when markdown-indent-agent-resume-timer
-    (cancel-timer markdown-indent-agent-resume-timer))
-  (setq markdown-indent-agentized-buffers
-        (cl-remove-if-not #'buffer-live-p markdown-indent-agentized-buffers))
-  (cond
-   ((not markdown-indent-agentized-buffers)
-    (when markdown-indent-agent-timer
-      (cancel-timer markdown-indent-agent-timer)))
-   ((memq (current-buffer) markdown-indent-agentized-buffers)
-    (markdown-indent-initialize-buffer (current-buffer)
-                                       markdown-indent-agent-active-delay))
-   (t
-    (markdown-indent-initialize-buffer (car markdown-indent-agentized-buffers)
-                                       markdown-indent-agent-passive-delay))))
-
-(defun markdown-indent-initialize-buffer (buffer delay)
-  "Indent BUFFER from `markdown-indent--initial-marker', yielding after DELAY."
-  (with-current-buffer buffer
-    (when (and (boundp 'markdown-indent-mode) markdown-indent-mode)
-      (goto-char (or markdown-indent--initial-marker (point-min)))
+      (goto-char (min beg end))
       (forward-line 0)
-      (let ((interruptp
-             (catch 'interrupt
-               (when (and markdown-indent--initial-marker
-                          (marker-position markdown-indent--initial-marker))
-                 (markdown-indent-add-properties
-                  markdown-indent--initial-marker (point-max) delay))
-               nil)))
-        (set-marker markdown-indent--initial-marker interruptp)
-        (unless interruptp
-          (setq markdown-indent-agentized-buffers
-                (delq buffer markdown-indent-agentized-buffers))
-          (run-hook-with-args 'markdown-indent-post-buffer-init-functions buffer))))))
+      (let ((limit (save-excursion
+                     (goto-char (min (max beg end) (point-max)))
+                     (line-end-position))))
+        (re-search-forward markdown-indent--heading-re limit t)))))
+
+(defun markdown-indent--invalidate (beg end)
+  "Mark every line between BEG and END as needing indentation again."
+  (save-excursion
+    (let ((start (progn (goto-char (min beg (point-max)))
+                        (line-beginning-position)))
+          (finish (progn (goto-char (min end (point-max)))
+                         (line-beginning-position 2))))
+      (jit-lock-refontify start finish))))
+
+(defun markdown-indent--next-heading (pos)
+  "Return the start of the first heading line after POS's line.
+Fall back to `point-max' when there is none."
+  (save-excursion
+    (save-match-data
+      (goto-char (min pos (point-max)))
+      (forward-line 1)
+      (if (re-search-forward markdown-indent--heading-re nil t)
+          (match-beginning 0)
+        (point-max)))))
+
+(defun markdown-indent--note-heading-change (beg end)
+  "Record whether the text about to change between BEG and END is a heading."
+  (when markdown-indent-mode
+    (setq markdown-indent--heading-changed
+          (or markdown-indent--heading-changed
+              (and (markdown-indent--heading-in-region-p beg end) t)))))
+
+(defun markdown-indent--after-change (beg end _len)
+  "Re-indent what the change between BEG and END affected."
+  (when markdown-indent-mode
+    (let ((heading (or markdown-indent--heading-changed
+                       (markdown-indent--heading-in-region-p beg end))))
+      (setq markdown-indent--heading-changed nil)
+      (if heading
+          ;; A heading was gained, lost or re-levelled: every following line
+          ;; takes its indentation from it, up to the next heading.
+          (markdown-indent--invalidate beg (markdown-indent--next-heading end))
+        (markdown-indent--invalidate beg end)))))
+
+
+;;; Mode
 
 ;;;###autoload
 (define-minor-mode markdown-indent-mode
@@ -241,25 +276,18 @@ line-prefix properties from the beginning to end line boundaries."
    (markdown-indent-mode
     (when markdown-indent-mode-turns-off-electric-indent
       (setq-local electric-indent-mode nil))
-    (setq-local markdown-indent--initial-marker (copy-marker 1))
-    (markdown-indent--compute-prefixes)
-    (add-hook 'after-change-functions #'markdown-indent-refresh-maybe nil 'local)
-    (add-hook 'before-change-functions #'markdown-indent-notify-modified-headline nil 'local)
-    (markdown-indent-remove-properties (point-min) (point-max))
-    (if markdown-indent-agentized-buffers
-        (push (current-buffer) markdown-indent-agentized-buffers)
-      (push (current-buffer) markdown-indent-agentized-buffers)
-      (setq markdown-indent-agent-timer
-            (run-with-idle-timer 0.2 t #'markdown-indent-initialize-agent))))
+    (unless markdown-indent--heading-prefixes
+      (markdown-indent--compute-prefixes))
+    (setq markdown-indent--heading-changed nil)
+    (add-hook 'before-change-functions #'markdown-indent--note-heading-change nil t)
+    (add-hook 'after-change-functions #'markdown-indent--after-change nil t)
+    (jit-lock-register #'markdown-indent--jit-lock)
+    (jit-lock-refontify))
    (t
-    (setq markdown-indent-agentized-buffers
-          (delq (current-buffer) markdown-indent-agentized-buffers))
-    (when (markerp markdown-indent--initial-marker)
-      (set-marker markdown-indent--initial-marker nil))
-    (remove-hook 'after-change-functions #'markdown-indent-refresh-maybe 'local)
-    (remove-hook 'before-change-functions #'markdown-indent-notify-modified-headline 'local)
-    (markdown-indent-remove-properties (point-min) (point-max))
-    (redraw-display))))
+    (remove-hook 'before-change-functions #'markdown-indent--note-heading-change t)
+    (remove-hook 'after-change-functions #'markdown-indent--after-change t)
+    (jit-lock-unregister #'markdown-indent--jit-lock)
+    (markdown-indent-remove-properties (point-min) (point-max)))))
 
 (provide 'markdown-indent)
 ;;; markdown-indent.el ends here
