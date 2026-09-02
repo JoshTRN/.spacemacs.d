@@ -33,7 +33,9 @@
    kubernetes
    llm-client
    (lsp :variables lsp-lens-enable t)
-   lua
+   ;; Default `lua-lsp-server' is `emmy', which buffer-locally disables
+   ;; `lua-language-server' -- see the Lua LSP block in local/config.el.
+   (lua :variables lua-lsp-server 'lua-language-server)
    markdown
    markdown-indent
    multiple-cursors
