@@ -7,6 +7,8 @@ instead of living in a separate checkout that every machine has to clone.
 - =functional-contrast-midnight= (the default in =dotspacemacs-themes=)
 - =functional-contrast-ocean=
 - =functional-contrast-forest-night=
+- =functional-contrast-dragonized= (matches the KDE Sweet/DR460NIZED look and
+  the caelestia/Hyprland dragonized scheme)
 
 Two third-party themes ride along in =themes/=, with their original headers
 intact: =github-dark= (ladroid) and =obscurii= (ported from a VS Code theme).
