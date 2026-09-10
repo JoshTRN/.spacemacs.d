@@ -159,7 +159,7 @@
  '(tree-sitter-hl-face:variable ((t (:inherit font-lock-variable-name-face))))
  '(tree-sitter-hl-face:variable.builtin ((t (:foreground "#f545b4"))))
  '(tree-sitter-hl-face:variable.parameter ((t (:foreground "#FF9735"))))
- '(variable-pitch ((t (:family "Inconsolata" :height 1.1))))
+ '(variable-pitch ((t (:family "Open Sans" :height 1.1))))
  ;; Headings (canonical set, shared by all functional-contrast themes).
  ;; outline-N carries the attributes and org-level-N inherits from it -- the
  ;; direction org itself uses.  Defining outline-N in terms of org-level-N

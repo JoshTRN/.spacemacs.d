@@ -247,7 +247,7 @@
  '(tree-sitter-hl-face:variable ((t (:inherit font-lock-variable-name-face))))
  '(tree-sitter-hl-face:variable.builtin ((t (:foreground "#f545b4"))))
  '(tree-sitter-hl-face:variable.parameter ((t (:foreground "#FF9735"))))
- '(variable-pitch ((t (:family "Inconsolata" :height 1.1))))
+ '(variable-pitch ((t (:family "Open Sans" :height 1.1))))
  '(vertical-border ((((type tty)) (:inherit (mode-line-inactive)))))
  '(web-mode-html-attr-name-face ((t (:foreground "#00d364"))))
  '(web-mode-html-tag-face ((t (:foreground "deep sky blue"))))

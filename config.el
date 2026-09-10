@@ -265,6 +265,9 @@ but reset any face remapping applied elsewhere."
  org-modern-fold-stars '(("" . "") ("" . "") ("" . "") ("" . "") ("" . ""))
  org-modern-hide-stars t
  org-modern-star 'fold
+ ;; valign handles table alignment; org-modern's table prettification
+ ;; fights with valign's separator-row overlays (short/shifted rule line)
+ org-modern-table nil
  org-pandoc-options '((wrap . "none") (metadata . "nil") (standalone . "false"))
  org-roam-directory "~/org-roam"
  org-src-tab-acts-natively  nil
@@ -615,6 +618,56 @@ but reset any face remapping applied elsewhere."
 
 ;; (setq dired-hide-details-preserved-columns '(1 2 3 4))
 (setq dired-hide-details-preserved-columns nil)
+
+(defvar dired-vlc-media-extensions
+  '("mp3" "flac" "ogg" "oga" "wav" "m4a" "aac" "opus" "wma" "aiff" "ape"
+    "mp4" "mkv" "avi" "webm" "mov" "flv" "wmv" "mpg" "mpeg" "m4v" "ts" "3gp" "vob")
+  "File extensions that dired opens in VLC instead of Emacs.")
+
+(defun vlc-media-file-p (file)
+  "Return non-nil if FILE is an audio/video file VLC should handle."
+  (and (stringp file)
+       (file-regular-p file)
+       (member (downcase (or (file-name-extension file) ""))
+               dired-vlc-media-extensions)))
+
+(defun vlc-open-file (file)
+  "Launch VLC on FILE without tying it to Emacs."
+  (let ((process (start-process "vlc" nil "vlc" file)))
+    (set-process-query-on-exit-flag process nil)
+    (message "Opened in VLC: %s" (file-name-nondirectory file))))
+
+(defun dired-find-file-or-vlc ()
+  "Open the file at point in VLC if it is audio/video, otherwise visit it."
+  (interactive)
+  (let ((file (dired-get-file-for-visit)))
+    (if (vlc-media-file-p file)
+        (vlc-open-file file)
+      (dired-find-file))))
+
+;; Dired's RET is covered above, but helm/recentf/`SPC f f' all reach media
+;; files through `find-file' instead, which visits them as raw bytes.
+;; Redirect those to VLC too; `find-file-literally' remains the escape
+;; hatch for genuinely inspecting a media file inside Emacs.
+(defun find-file-redirect-to-vlc (orig filename &rest args)
+  "Send audio/video FILENAME to VLC; visit everything else with ORIG."
+  (if (vlc-media-file-p filename)
+      (vlc-open-file filename)
+    (apply orig filename args)))
+
+(advice-add 'find-file :around #'find-file-redirect-to-vlc)
+
+;; evil-collection binds RET in dired's normal-state auxiliary map, which
+;; outranks `dired-mode-map', so bind buffer-locally per state instead.
+(defun dired-vlc-local-keys ()
+  "Bind RET to `dired-find-file-or-vlc' across evil states, buffer-locally."
+  (when (fboundp 'evil-local-set-key)
+    (dolist (state '(normal evilified motion))
+      (evil-local-set-key state (kbd "RET") #'dired-find-file-or-vlc))))
+(add-hook 'dired-mode-hook #'dired-vlc-local-keys)
+
+(with-eval-after-load 'dired
+  (define-key dired-mode-map (kbd "RET") #'dired-find-file-or-vlc))
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                               DOCKER
@@ -986,3 +1039,13 @@ If `solaire-default-face` is available, use its background; otherwise use the de
 (provide 'evil-collection-vterm)
 
 (spacemacs/set-leader-keys ":" #'eval-expression)
+
+;; Expose a named socket in GUI sessions so they can be inspected with
+;; `emacsclient -s gui' (the plain "server" socket belongs to the daemon).
+;; Sitting at the end of config.el, a live socket also proves the whole
+;; file loaded without an error aborting it partway.
+(unless (daemonp)
+  (require 'server)
+  (setq server-name "gui")
+  (unless (server-running-p)
+    (server-start)))
