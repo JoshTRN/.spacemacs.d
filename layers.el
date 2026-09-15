@@ -92,4 +92,5 @@
    (vue :variables vue-backend 'lsp)
    windows-scripts
    yaml
+   zoho-tickets
    ))

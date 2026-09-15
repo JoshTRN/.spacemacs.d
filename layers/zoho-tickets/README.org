@@ -1,0 +1,225 @@
+#+TITLE: zoho-tickets layer
+
+* Description
+Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
+(no browser involved).
+
+** Features:
+  - Dashboard: views sidebar on the left with =[x]= checkboxes (OR
+    filter — the table shows the union of all checked views), ticket
+    table on the right. Starred views are listed first, every other
+    view below; on first open only the starred =Open= view is checked
+  - Tickets open as org-mode documents with Overview / Thread /
+    Comments tabs; each email and comment is an org subheading
+  - All API traffic runs in the background — Emacs never blocks on
+    the network. Fetches show a =Fetching …= placeholder that fills
+    in when the API answers; replies, comments and time entries send
+    while you keep working, and a failed send pulls you back: the
+    buffer with the unsent content is refocused with a loud error,
+    ready to retry
+  - Post private/public comments
+  - Post time entries to tickets
+  - Send org-clocked time to a ticket via the =ZOHO_TICKET_ID= property
+
+* Install
+** Layer
+Add =zoho-tickets= to =dotspacemacs-configuration-layers= in your
+=~/.spacemacs=.
+
+** Zoho OAuth setup (one time)
+Where to click, start to finish:
+
+1. Open the *Zoho API Console*: https://api-console.zoho.com
+   (sign in with the same Zoho account you use for Zoho Desk).
+2. Click *Get Started* (first visit) or *Add Client* (top right).
+3. Choose the *Self Client* client type and confirm with *Create* /
+   *OK*. Open it and copy the *Client ID* and *Client Secret* from the
+   *Client Secret* tab.
+4. Put the client credentials in =~/.authinfo.gpg=:
+   #+begin_example
+   machine zoho-desk login client-id password 1000.XXXXXXXX
+   machine zoho-desk login client-secret password XXXXXXXX
+   #+end_example
+5. Switch to the *Generate Code* tab (still inside the Self Client)
+   and request a grant code with:
+   - Scope:
+     =Desk.basic.ALL,Desk.tickets.ALL,Desk.settings.READ,Desk.search.READ,Desk.contacts.READ=
+   - Time Duration: 10 minutes (the code is single use and expires)
+   - Scope Description: anything, e.g. =emacs=
+   Click *Create* and copy the code from the popup.
+6. In Emacs, run =M-x zoho-desk-authorize= within those 10 minutes and
+   paste the code. When it asks =Save refresh token to ~/.authinfo?=,
+   answer yes — it appends the =refresh-token= line for you. That is
+   the last grant code you will ever generate on this account.
+
+The refresh token does not expire; short-lived access tokens are
+minted from it automatically. If you ever see the API console again,
+it means the refresh-token line is missing from your authinfo file —
+generating a code every session is NOT part of the normal flow.
+
+*** Additional computers
+Nothing needs to be redone in the API console: copy the same three
+=machine zoho-desk ...= lines into =~/.authinfo.gpg= on each machine
+and it works. The refresh token is valid from any number of machines;
+each Emacs mints its own access token from it.
+
+Only if you prefer a separate token per machine (e.g. to be able to
+revoke one laptop later): repeat steps 5–6 on the new machine, reusing
+the same Client ID/Secret. Revoking is done from the API console by
+deleting the Self Client (which kills all its tokens).
+
+** Configuration
+- =zoho-desk-base-url= / =zoho-desk-accounts-url= :: change if your org
+  is on another data center (e.g. =desk.zoho.eu= / =accounts.zoho.eu=).
+- =zoho-desk-org-id= :: only needed if the token can see several orgs.
+- =zoho-desk-department-id= :: views are per-department in Zoho Desk;
+  when unset the dashboard prompts once per session (~D~ in the sidebar
+  switches). Set it to skip the prompt.
+- =zoho-desk-starred-view-names= :: names shown in the Starred Views
+  section. The public API does not expose the web UI's stars, so the
+  section is driven by this list. Note the web UI renames system views:
+  "My Tickets"/"All Tickets" are =My Cases=/=All Cases= in the API.
+- =zoho-desk-comments-public= :: post comments visible to the contact.
+- =zoho-desk-sidebar-width= :: width of the views pane.
+- =zoho-desk-thread-prefetch= :: how many of the newest emails are
+  fetched in full when a ticket opens (older ones load on demand).
+
+Sidebar counts show how many tickets have been fetched for a view
+(=50+= means a full page — the API has no per-view total).
+
+* Key bindings
+
+| Key Binding | Description                                |
+|-------------+--------------------------------------------|
+| ~SPC o z z~ | Open the dashboard                         |
+| ~SPC o z a~ | One-time OAuth grant-code exchange         |
+| ~SPC o z t~ | Add a time entry to a ticket               |
+| ~SPC o z l~ | Log org-clocked time of the entry at point |
+
+Views sidebar (left pane):
+
+| Key             | Description                       |
+|-----------------+-----------------------------------|
+| ~RET~ / ~x~ / click | Toggle view checkbox (OR filter) |
+| ~g~ / ~gr~      | Refetch views from Zoho           |
+| ~q~             | Close dashboard, restore windows  |
+
+Ticket table (right pane):
+
+| Key   | Description                          |
+|-------+--------------------------------------|
+| ~RET~ | Open ticket as org document          |
+| ~g~ / ~gr~ | Refresh                         |
+| ~]~ / ~[~ | Next / previous page             |
+| ~t~   | Add time entry to ticket at point    |
+| ~w~   | Copy org heading with ZOHO_TICKET_ID |
+| ~o~   | Open ticket in browser               |
+| ~q~   | Close dashboard, restore windows     |
+
+Ticket document (org buffer, =zoho-desk-ticket-minor-mode=). The
+buffer is read-only except the Reply section body; the header-line
+tabs are clickable. Commands are on the major-mode leader (~,~ or
+~SPC m~) as well as =C-c z=:
+
+| Leader key | Also         | Description                              |
+|------------+--------------+------------------------------------------|
+| ~, 1-3~    | ~C-c z 1-3~, click | Overview / Thread / Comments tab   |
+|            | ~gt~ / ~gT~  | Next / previous tab (evil)               |
+| ~, e~      | ~C-c z e~    | Fetch full email body at point           |
+| ~, s~      | ~C-c z s~    | Send the Reply section as email          |
+| ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
+| ~, t~      | ~C-c z t~    | Add time entry                           |
+| ~, w~      | ~C-c z w~    | Copy org heading with ZOHO_TICKET_ID     |
+| ~, y~      | ~C-c z y~    | Copy agent-console ticket URL            |
+| ~, #~      | ~C-c z #~    | Copy ticket number (=#ART-364= form)     |
+| ~, a~      | ~C-c z a~    | Add org contact email to the To line     |
+| ~, b~      | ~C-c z o~    | Open in browser                          |
+| ~, r~      | ~C-c z g~    | Refresh ticket                           |
+
+The dashboard panes have leader keys too: sidebar ~, t~ toggle /
+~, r~ refresh / ~, d~ department / ~, q~ quit; table ~, o~ open /
+~, n~ / ~, p~ pages / ~, t~ time / ~, w~ snippet / ~, y~ url /
+~, #~ number / ~, b~ browser.
+
+Replies: the Email Thread section lists emails newest-first, with a
+=** Reply= subheading at the top — everything under that subheading
+(and only that) is editable and is what gets sent. Outgoing replies
+are linked to the ticket's newest email thread (undocumented
+=inReplyToThreadId= sendReply field), so they continue the
+recipient's existing mail conversation instead of starting a new
+one, matching what the web UI does. The Reply section starts with an
+editable =To:= line prefilled with the sender of the latest inbound
+email (fallback: the ticket contact) — the =To: = label itself is
+read-only, the address is yours to edit (any address works — send a
+test to yourself). The two input fields — the address and the reply
+body below it — carry a background halfway between the default and
+solaire backgrounds (=zoho-desk-input= face), so the editable areas
+are visible at a glance; the body field grows with the reply as you
+type. Org's own fontification keeps precedence inside the body, so
+src and quote blocks stay on their darker block background. ~, s~ sends straight to it, no prompts; leave the line blank
+to pick from the ticket's known addresses instead. ~, a~ (or
+~C-c z a~) fuzzy-picks an email from the whole org's contact list
+and adds it to the To line (comma-appended when one is already
+there); the list is fetched once per session, ~C-u , a~
+re-fetches. It needs the =Desk.contacts.READ= scope — tokens
+generated before it joined the scope list above must be re-created
+via =M-x zoho-desk-authorize= with a fresh grant code. Set
+=zoho-desk-signature= to append a plain-text signature to every
+reply.
+
+Replies are written in org and exported to HTML on send
+(=zoho-desk-reply-html=, default on): bold, lists, tables and links
+all render in the email. =#+begin_quote= blocks arrive as italicized
+left-bordered blocks and =#+begin_src= blocks as monospace boxes with
+syntax highlighting (htmlize inline colors from the current theme, on
+a background matching it). Zoho preserves these tags and inline
+styles; only inline images are stripped (see below). ~, i e~ (or ~C-c z i~) embeds the image
+currently in the clipboard (screenshot it, then ~, i e~); with a
+prefix argument it prompts for a file instead. The image lands in
+the reply as a =[[file:...]]= link (shown inline in the buffer);
+on send it is embedded in the HTML as a base64 data URI
+and also uploaded as a regular attachment, so clients that block
+inline data images still receive the file. Set
+=zoho-desk-reply-html= to nil for plain-text replies.
+
+The From address is resolved per department: global
+=zoho-desk-reply-from= → =zoho-desk-department-reply-from= entry →
+address learned this session → this ticket's outbound/inbound
+emails → a one-time prompt that offers to remember the answer.
+
+Email replies: write in the body field below the =To:= line under
+the =** Reply= heading (only the field's content is sent; org =#=
+comment lines are stripped from the email) and ~C-c z s~ sends in
+the background.  From is the support
+address the latest inbound email was sent to, unless
+=zoho-desk-reply-from= is set.  Web-form tickets often have no
+inbound email, so set =zoho-desk-reply-from= to your department's
+support address if sending fails.
+
+* Org workflow
+1. In the ticket table, press ~w~ on a ticket and yank into an org file:
+   #+begin_example
+   * TODO #ART-359 Deploy Updated PTC Hub to Dev
+   :PROPERTIES:
+   :ZOHO_TICKET_ID: 4000000031007
+   :END:
+   #+end_example
+2. Clock time on the entry as usual.
+3. =M-x zoho-desk-log-time-from-org= (~SPC o z l~) on the entry posts the
+   clocked minutes as a Zoho Desk time entry.
+
+* API notes
+Endpoints used (base =https://desk.zoho.com/api/v1=, headers
+=Authorization: Zoho-oauthtoken <token>= and =orgId=):
+
+- =GET /organizations= — resolve orgId
+- =GET /starredViews?module=tickets= (fallback =GET /views=)
+- =GET /tickets?viewId=&include=contacts,assignee&limit=&from= — fetched
+  once per checked view, then merged (union, deduped by ticket id,
+  newest modification first)
+- =GET /tickets/{id}= , =/threads=, =/threads/{tid}=, =/comments=
+- =POST /tickets/{id}/comments= — ={"content": ..., "isPublic": ...}=
+- =POST /tickets/{id}/timeEntry= — ={"hoursSpent", "minutesSpent",
+  "executedTime", "description"}=
+
+Full reference: https://desk.zoho.com/DeskAPIDocument
