@@ -1040,6 +1040,18 @@ If `solaire-default-face` is available, use its background; otherwise use the de
 
 (spacemacs/set-leader-keys ":" #'eval-expression)
 
+;; Hunspell's en_US.aff declares WORDCHARS as digits plus the curly
+;; apostrophe only, and ispell.el builds its word tokenizer from that
+;; line -- so "isn't" gets split into "isn" and "t" and each side is
+;; spell-checked alone.  Overriding the dictionary entry here (the
+;; -local- alist takes precedence over the .aff autodetection) puts
+;; both apostrophes back inside words.
+(with-eval-after-load 'ispell
+  (setq ispell-local-dictionary-alist
+        '(("en_US" "[[:alpha:]]" "[^[:alpha:]]" "['’]" t
+           ("-d" "en_US") nil utf-8))
+        ispell-local-dictionary "en_US"))
+
 ;; Expose a named socket in GUI sessions so they can be inspected with
 ;; `emacsclient -s gui' (the plain "server" socket belongs to the daemon).
 ;; Sitting at the end of config.el, a live socket also proves the whole
