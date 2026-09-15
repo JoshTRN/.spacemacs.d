@@ -256,8 +256,9 @@ It should only modify the values of Spacemacs settings."
    ;; package can be defined with `:package', or a theme can be defined with
    ;; `:location' to download the theme package, refer the themes section in
    ;; DOCUMENTATION.org for the full theme specifications.
-   dotspacemacs-themes '((functional-contrast-midnight :location built-in)
+   dotspacemacs-themes '(
                          (functional-contrast-dragonized :location built-in)
+                         (functional-contrast-midnight :location built-in)
                          spacemacs-dark
                          spacemacs-light)
 
