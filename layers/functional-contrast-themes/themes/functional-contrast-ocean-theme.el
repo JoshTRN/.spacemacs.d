@@ -156,7 +156,6 @@
  '(org-modern-time-active   ((t (:foreground "#82A0C2" :background "#1A2A36" :box (:line-width 1 :color "#3A4A5A") :weight normal))))
  '(org-modern-time-inactive ((t (:foreground "#8aa2b2" :background "#1A2A36" :box (:line-width 1 :color "#2A3A4A") :weight normal))))
  '(org-modern-todo ((t (:foreground "#D77070" :weight bold :background "#3A2020" :box (:line-width 1 :color "#D77070")))))
- '(org-modern-todo-faces `(("IN PROGRESS" :family ,(face-attribute 'default :family nil 'default) :height ,(let ((h (face-attribute 'org-modern-todo :height nil 'default))) (if (eq h 'unspecified) 1.0 h)) :weight ,(let ((w (face-attribute 'org-modern-todo :weight nil 'default))) (if (eq w 'unspecified) 'bold w)) :foreground "#D4AA00" :background "#3A2F00" :box (:line-width 1 :color "#D4AA00"))))
  '(org-special-keyword ((t (:inherit org-headline-done))))
  '(org-src ((t (:inherit fixed-pitch))))
  '(org-superstar-item ((t (:foreground "lightgoldenrod1"))))

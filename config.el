@@ -833,56 +833,47 @@ If `solaire-default-face` is available, use its background; otherwise use the de
 
 (advice-add 'find-file-noselect :around #'disable-large-file-warning-for-pdf)
 
-(with-eval-after-load 'org
+(with-eval-after-load 'org-modern
+  (defface org-modern-in-progress
+    '((t (:inherit org-modern-label)))
+    "Face for the IN PROGRESS status label."
+    :group 'org-modern)
+  ;; All status labels and progress cookies share the same typography.
+  ;; Keep state-specific differences to their colors and border colors.
   (custom-set-faces
-   '(org-modern-label
-     ((t
-       (:family "Helvetica"
-                :width condensed
-                :weight regular
-                :underline nil
-                :box (:line-width (-1 . -2)
-                                  :color "#07273B")))))
-
+   `(org-modern-label
+     ((t (:family "Helvetica"
+          :height ,(face-attribute 'default :height nil 'default) :width normal :weight bold :underline nil
+          :box (:line-width 1 :color "#07273B")))))
    '(org-modern-todo
-     ((t
-       (:foreground "#D77070"
-                    :weight bold
-                    :background "#3A2020"
-                    :box (:line-width 1 :color "#D77070")))))
-
+     ((t (:inherit org-modern-label
+          :foreground "#D77070" :background "#3A2020"
+          :inverse-video nil
+          :box (:line-width 1 :color "#D77070")))))
    '(org-modern-done
-     ((t
-       (:foreground "#5FAF5F"
-                    :weight bold
-                    :background "#1F3A1F"
-                    :box (:line-width 1 :color "#5FAF5F")))))
-
+     ((t (:inherit org-modern-label
+          :foreground "#5FAF5F" :background "#1F3A1F"
+          :box (:line-width 1 :color "#5FAF5F")))))
+   ;; Progress segments use the status colors and typography, without
+   ;; drawing a separate status-label border around each segment.
+   '(org-modern-progress-complete
+     ((t (:inherit org-modern-done :box nil))))
+   '(org-modern-progress-incomplete
+     ((t (:inherit org-modern-todo :box nil))))
+   '(org-modern-in-progress
+     ((t (:inherit org-modern-label
+          :foreground "#D4AA00" :background "#3A2F00"
+          :box (:line-width 1 :color "#D4AA00")))))
    '(org-modern-priority
-     ((t
-       (:inherit default))))
-
+     ((t (:inherit default))))
    '(org-modern-tag
-     ((t
-       (:family "Helvetica"
-                :weight semibold
-                :height 0.9
-                :foreground "#33878F"
-                :background "#0D2224"
-                :box (:line-width 1 :color "#33878F")))))
-
-   '(org-special-keyword ((t (:inherit org-headline-done))))
-
-   '(org-modern-todo-faces
-     `(("IN PROGRESS"
-        :family ,(face-attribute 'default :family nil 'default)
-        :height ,(let ((h (face-attribute 'org-modern-todo :height nil 'default)))
-                   (if (eq h 'unspecified) 1.0 h))
-        :weight ,(let ((w (face-attribute 'org-modern-todo :weight nil 'default)))
-                   (if (eq w 'unspecified) 'bold w))
-        :foreground "#D4AA00"
-        :background "#3A2F00"
-        :box (:line-width 1 :color "#D4AA00"))))))
+     ((t (:family "Helvetica" :weight semibold :height 0.9
+          :foreground "#33878F" :background "#0D2224"
+          :box (:line-width 1 :color "#33878F")))))
+   '(org-special-keyword ((t (:inherit org-headline-done)))))
+  ;; This is a variable containing keyword overrides, not a face.
+  (setf (alist-get "IN PROGRESS" org-modern-todo-faces nil nil #'equal)
+        'org-modern-in-progress))
 
 (with-eval-after-load 'org
 
