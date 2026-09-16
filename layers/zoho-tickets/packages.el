@@ -82,17 +82,18 @@ Each entry is either:
                zoho-desk-finish-ticket-timer
                zoho-desk-cancel-ticket-timer)
     :init
-    (spacemacs/declare-prefix "oz" "zoho")
+    (spacemacs/declare-prefix "az" "zoho")
+    (spacemacs/declare-prefix "azt" "tickets")
     (spacemacs/set-leader-keys
-      "ozz" 'zoho-desk-dashboard
-      "ozu" 'zoho-desk-open-ticket-url
-      "ozf" 'zoho-desk-quickfind
-      "oza" 'zoho-desk-authorize
-      "ozt" 'zoho-desk-add-time-entry
-      "ozl" 'zoho-desk-log-time-from-org
-      "ozi" 'zoho-desk-start-ticket-timer
-      "ozo" 'zoho-desk-finish-ticket-timer
-      "ozk" 'zoho-desk-cancel-ticket-timer)
+      "aztd" 'zoho-desk-dashboard
+      "aztu" 'zoho-desk-open-ticket-url
+      "aztf" 'zoho-desk-quickfind
+      "azta" 'zoho-desk-authorize
+      "aztt" 'zoho-desk-add-time-entry
+      "aztl" 'zoho-desk-log-time-from-org
+      "azti" 'zoho-desk-start-ticket-timer
+      "azto" 'zoho-desk-finish-ticket-timer
+      "aztk" 'zoho-desk-cancel-ticket-timer)
     :config
     ;; Major-mode leader (, / SPC m) in the dashboard panes.
     (spacemacs/set-leader-keys-for-major-mode 'zoho-desk-views-mode
@@ -126,6 +127,7 @@ Each entry is either:
       "." 'zoho-desk-pick-executed-time
       "a" 'zoho-desk-add-email
       "ie" 'zoho-desk-insert-image
+      "ik" 'zoho-desk-refresh-session-cookie
       "c" 'zoho-desk-add-comment
       "t" 'zoho-desk-add-time-entry
       "T" 'zoho-desk-start-ticket-timer

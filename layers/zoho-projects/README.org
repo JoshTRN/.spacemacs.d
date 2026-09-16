@@ -1,0 +1,214 @@
+#+TITLE: zoho-projects layer
+
+* Description
+Zoho Projects inside Emacs, via the Zoho Projects REST API
+(=projectsapi.zoho.com=, no browser involved).  The sibling of the
+=zoho-tickets= layer — Projects is a separate Zoho product with its
+own API and OAuth scopes, so it gets its own layer, but the shape is
+the same: a two-pane dashboard, org-mode documents, background API
+traffic, posframe-timer time tracking.
+
+** Features:
+  - Dashboard: the portal's projects on the left (=PROF-167 Name=
+    rows, open-task counts), the selected project's task table on
+    the right (key, status, %, owner, due date, name)
+  - Tasks open as org-mode documents with Overview / Comments /
+    Time Logs tabs; the Details section carries status, owner,
+    dates, duration, work hours and completion
+  - Incoming HTML (task descriptions, comments) is converted to org
+    markup via pandoc, with a plain-text fallback (see
+    =zoho-projects-pandoc-program=)
+  - All API traffic runs in the background — fetches show a
+    =Fetching …= placeholder that fills in when the API answers;
+    posts send while you keep working, and a failed post refocuses
+    the buffer with the unsent content and a loud error
+  - Post comments to tasks
+  - Post time logs — from a prompt anywhere, or from the task's
+    Time Logs tab (a =** New Time Log= entry with input fields for
+    Date, Hours/Minutes, Billing and Notes sits at the top)
+  - Send org-clocked time to a task via the =ZOHO_PROJECT_ID= /
+    =ZOHO_TASK_ID= properties
+  - Track work live with the posframe timer: ~T~ on a task clocks
+    in a floating count-up labeled with the task key and name;
+    finishing it from anywhere drops the elapsed time into that
+    task's New Time Log fields, ready to describe and submit
+
+* Install
+** Layer
+Add =zoho-projects= to =dotspacemacs-configuration-layers= in your
+=~/.spacemacs=.
+
+Optional: install =pandoc= (system package) so incoming HTML is
+rendered as org markup instead of plain text.
+
+** Zoho OAuth setup (one time)
+The same Self Client created for the zoho-tickets layer works —
+Projects just needs its own grant code because the scopes differ.
+If you have no Self Client yet, follow the zoho-tickets README
+steps 1–4 first (its =client-id= / =client-secret= authinfo lines
+are found by this layer too).
+
+1. Open the *Zoho API Console* (https://api-console.zoho.com), open
+   your Self Client, switch to the *Generate Code* tab.
+2. Request a grant code with:
+   - Scope:
+     =ZohoProjects.portals.READ,ZohoProjects.projects.READ,ZohoProjects.tasklists.READ,ZohoProjects.tasks.ALL,ZohoProjects.timesheets.ALL,ZohoProjects.users.READ=
+   - Time Duration: 10 minutes (the code is single use and expires)
+   - Scope Description: anything, e.g. =emacs projects=
+3. In Emacs, run =M-x zoho-projects-authorize= within those 10
+   minutes and paste the code.  When it asks =Save refresh token to
+   ~/.authinfo?=, answer yes — it appends the line for you:
+   #+begin_example
+   machine zoho-projects login refresh-token password 1000.XXXXXXXX
+   #+end_example
+
+The refresh token does not expire; short-lived access tokens are
+minted from it automatically.  Desk and Projects tokens are stored
+under different authinfo hosts (=zoho-desk= / =zoho-projects=) and
+never mix.
+
+If you want dedicated client credentials for this layer instead of
+sharing the Desk ones, add =machine zoho-projects login client-id
+...= and =client-secret= lines — they take precedence over the
+=zoho-desk= fallback.
+
+** Configuration
+- =zoho-projects-base-url= / =zoho-projects-accounts-url= :: change
+  if your org is on another data center (e.g. =projectsapi.zoho.eu=
+  / =accounts.zoho.eu=).
+- =zoho-projects-portal-id= :: only needed if the token can see
+  several portals; a single portal is picked up automatically.
+- =zoho-projects-project-status= :: which projects the sidebar
+  lists (=active= by default).
+- =zoho-projects-task-filter= :: initial task filter
+  (=notcompleted= by default; ~c~ in the table toggles =all=).
+- =zoho-projects-default-bill-status= :: prefill of the New Time
+  Log's Billing field (=Billable=).
+- =zoho-projects-timelog-months= :: how many months of project
+  time logs the Time Logs tab scans (the API only serves logs per
+  project and month; default 12).
+- =zoho-projects-sidebar-width= :: width of the projects pane.
+
+* Key bindings
+
+| Key Binding   | Description                                     |
+|---------------+-------------------------------------------------|
+| ~SPC a z p d~ | Open the dashboard                              |
+| ~SPC a z p a~ | One-time OAuth grant-code exchange              |
+| ~SPC a z p t~ | Add a time log to a task                        |
+| ~SPC a z p l~ | Log org-clocked time of the entry at point      |
+| ~SPC a z p i~ | Start the task timer (needs a task at point)    |
+| ~SPC a z p o~ | Finish the task timer → fill its New Time Log   |
+| ~SPC a z p k~ | Cancel the task timer                           |
+
+Projects sidebar (left pane):
+
+| Key         | Description                      |
+|-------------+----------------------------------|
+| ~RET~ / click | Show the project's tasks       |
+| ~g~ / ~gr~  | Refetch projects from Zoho       |
+| ~o~         | Open project in browser          |
+| ~q~         | Close dashboard, restore windows |
+
+Task table (right pane):
+
+| Key   | Description                              |
+|-------+------------------------------------------|
+| ~RET~ | Open task as org document                |
+| ~g~ / ~gr~ | Refresh                             |
+| ~]~ / ~[~ | Next / previous page                 |
+| ~c~   | Toggle completed tasks in the list       |
+| ~t~   | Add time log to task at point            |
+| ~T~   | Start the task timer on task at point    |
+| ~w~   | Copy org heading with the task's ids     |
+| ~o~   | Open task in browser                     |
+| ~q~   | Close dashboard, restore windows         |
+
+Task document (org buffer, =zoho-projects-task-minor-mode=).  The
+buffer is read-only except the New Time Log input fields; the
+header-line tabs are clickable.  Commands are on the major-mode
+leader (~,~ or ~SPC m~) as well as =C-c z=:
+
+| Leader key | Also         | Description                            |
+|------------+--------------+----------------------------------------|
+| ~, 1-3~    | ~C-c z 1-3~, click | Overview / Comments / Time Logs tab |
+|            | ~gt~ / ~gT~  | Next / previous tab (evil)             |
+| ~, l~      | ~C-c z l~    | Post the New Time Log section          |
+| ~, .~      | ~C-c .~      | Org date picker for the Date field     |
+|            | ~M-n~ / ~M-p~ | Next / previous input field           |
+| ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
+| ~, t~      | ~C-c z t~    | Add time log                           |
+| ~, T~      | ~C-c z T~    | Start the task timer on this task      |
+| ~, w~      | ~C-c z w~    | Copy org heading with the task's ids   |
+| ~, y~      | ~C-c z y~    | Copy the task's web URL                |
+| ~, #~      | ~C-c z #~    | Copy the task key (=AR1-T1= form)      |
+| ~, b~      | ~C-c z o~    | Open in browser                        |
+| ~, r~      | ~C-c z g~    | Refresh task                           |
+
+Time logs: the Time Logs tab lists the task's logs as org
+subheadings — date, duration, owner, time period, bill status and
+a notes snippet in the heading.  Entries are *collapsed by
+default* — every tab switch re-folds them — so the tab reads as a
+compact index; ~TAB~ on a heading opens the notes.  The top entry
+is =** New Time Log=: a =Date:= line prefilled with today (~C-c .~
+or ~, .~ opens the org date picker on it), =Hours:= / =Minutes:=
+values (blank counts as 0), a =Billing:= line prefilled from
+=zoho-projects-default-bill-status= (=b= / =n= shorthands work),
+and a notes field below them, all on the =zoho-projects-input=
+background.  ~M-n~ / ~M-p~ cycle between the input fields.  ~, l~
+(or ~C-c z l~) posts it in the background and refreshes the task
+so the new entry appears in the list.
+
+Task timer: ~T~ on a task (table line or open task, also ~, T~ /
+~C-c z T~ / ~SPC a z p i~) clocks the =posframe-timer= free clock
+in against it.  When done, ~SPC a z p o~ (or =posframe-timer='s
+own clock-out) stops the clock from wherever you are, brings the
+task up on its Time Logs tab and fills the New Time Log — Date set
+to when the timer started, Hours / Minutes set to the elapsed
+time, point in the notes field.  ~SPC a z p k~ discards the timer
+without logging anything.  Requires the =posframe-timer= layer.
+Desk and Projects share the one posframe clock, so only one of
+their timers runs at a time.
+
+* Org workflow
+1. In the task table, press ~w~ on a task and yank into an org file:
+   #+begin_example
+   * TODO AR1-T1 Develop and Deploy Artifact Listener
+   :PROPERTIES:
+   :ZOHO_PROJECT_ID: 170000000001234
+   :ZOHO_TASK_ID: 170000000005678
+   :END:
+   #+end_example
+2. Clock time on the entry as usual.
+3. =M-x zoho-projects-log-time-from-org= (~SPC a z p l~) on the
+   entry posts the clocked minutes as a task time log.
+
+* API notes
+Endpoints used (base =https://projectsapi.zoho.com/restapi=, header
+=Authorization: Zoho-oauthtoken <token>=):
+
+- =GET /portals/= — resolve the portal id
+- =GET /portal/{pid}/projects/?index=&range=&status=active= —
+  fetched as parallel pages of 100 for the sidebar
+- =GET /portal/{pid}/projects/{proj}/tasks/?index=&range=&status==
+- =GET .../tasks/{task}/= , =.../tasks/{task}/comments/=
+- =GET /portal/{pid}/projects/{proj}/logs/?users_list=all&view_type=month&date=MM-01-YYYY&component_type=task&bill_status=All=
+  — the v1 API has *no task-scoped GET* for time logs (the
+  =.../tasks/{task}/logs/= path only accepts POST), so the Time
+  Logs tab fetches the project's timesheet month by month across
+  the task's date span (capped at =zoho-projects-timelog-months=,
+  in parallel) and filters the =tasklogs= down to the task; the
+  entries splice into the document when they land
+- =POST .../tasks/{task}/comments/= — form param =content=
+- =POST .../tasks/{task}/logs/= — form params =date= (MM-DD-YYYY),
+  =bill_status= (Billable / Non Billable), =hours= (H:MM), =notes=
+
+v1 API quirks handled here: writes take form-encoded parameters
+(not JSON bodies), empty collections come back as *204 No Content*,
+and some errors arrive as HTTP 200 with an ={"error": ...}= body.
+Browser links (=o= / =, b= / =, y=) are best-effort constructions
+of the web UI's hash URLs
+(=…/portal/<name>#taskdetail/<project>/<tasklist>/<task>=) — the
+API exposes no web URL for tasks.
+
+Full reference: https://www.zoho.com/projects/help/rest-api/

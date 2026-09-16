@@ -205,6 +205,31 @@ markup.  When nil, or when the program is not installed, they
 degrade to the plain-text rendering."
   :type '(choice (string :tag "Program") (const :tag "Disabled" nil)))
 
+(defcustom zoho-desk-inline-images t
+  "When non-nil, fetch and display inline images in ticket buffers.
+Incoming emails reference their embedded images as relative
+/api/v1/.../inlineImages/... links; those are downloadable through
+the authenticated API, so they are fetched in the background and
+shown in place of the link.  Fetched images are cached under
+`temporary-file-directory' for the session."
+  :type 'boolean)
+
+(defcustom zoho-desk-send-inline-images t
+  "When non-nil, [[file:...]] images in replies are sent truly inline.
+Each image is uploaded through the agent console's composer
+servlet and referenced so that Zoho's mailer converts it to a
+real cid MIME part — the recipient sees the image in the email
+body, not as an attachment.  The servlet only accepts the
+browser's session cookie (there is no OAuth equivalent), so
+`zoho-desk-refresh-session-cookie' must be run when the session
+expires; a send with images is refused, not degraded, until then.
+When nil, images go out as attachments with [image: ...] markers."
+  :type 'boolean)
+
+(defcustom zoho-desk-inline-image-max-width 500
+  "Maximum display width of an inline image, in pixels."
+  :type 'natnum)
+
 (defcustom zoho-desk-department-reply-from nil
   "Alist mapping departmentId to the support address used as From.
 Filled in automatically when you confirm the From prompt on a
@@ -302,6 +327,15 @@ backgrounds."
   (decode-coding-string
    (buffer-substring-no-properties (point) (point-max)) 'utf-8))
 
+(defun zoho-desk--response-body-raw ()
+  "Return the undecoded body bytes of the url response buffer.
+`url-http-end-of-headers' can sit before the headers' final
+newline; that byte is skipped, it must not leak into the body."
+  (goto-char (or url-http-end-of-headers (point-min)))
+  (when (eq (char-after) ?\n)
+    (forward-char 1))
+  (buffer-substring-no-properties (point) (point-max)))
+
 (defun zoho-desk--token-request (params)
   "POST PARAMS to the Zoho OAuth token endpoint, return parsed JSON."
   (let* ((url-request-method "POST")
@@ -369,6 +403,100 @@ to ~/.authinfo), replacing any previous refresh-token line."
       (message "Refresh token saved to %s — no more grant codes needed"
                file)
       t)))
+
+;;;; Agent-console session cookie
+;;
+;; Sending a NEW image truly inline needs the composer's upload
+;; servlet (ImageUpload.do), which only accepts the browser's session
+;; cookie — there is no OAuth equivalent (verified by probing; see
+;; README).  Two cookies suffice: __Secure-iamsdt (the IAM session,
+;; HttpOnly so only visible in the DevTools Network pane) and crmcsr
+;; (the CSRF token, echoed as header and form field).
+
+(defvar zoho-desk--ticket)              ; buffer-local, defined below
+
+(defvar zoho-desk--session-cookie nil
+  "Minimal agent-console cookie string, or nil until captured.")
+
+(defun zoho-desk--current-session-cookie ()
+  "Return the session cookie, loading it from auth-source if needed."
+  (or zoho-desk--session-cookie
+      (setq zoho-desk--session-cookie
+            (zoho-desk--secret "session-cookie"))))
+
+(defun zoho-desk--session-cookie-parse (header)
+  "Extract the two needed cookies from a pasted Cookie HEADER.
+Returns the minimal cookie string, or nil when either cookie is
+missing from the paste."
+  (let (sdt csr)
+    (dolist (pair (split-string (or header "") ";[ \t]*" t))
+      (when (string-match "\\`\\([^=]+\\)=\\(.*\\)\\'" pair)
+        (let ((name (string-trim (match-string 1 pair)))
+              (value (match-string 2 pair)))
+          (cond ((equal name "__Secure-iamsdt") (setq sdt value))
+                ((equal name "crmcsr") (setq csr value))))))
+    (when (and sdt csr)
+      (format "__Secure-iamsdt=%s;crmcsr=%s" sdt csr))))
+
+(defun zoho-desk--persist-session-cookie (cookie)
+  "Save COOKIE as the zoho-desk session-cookie authinfo line."
+  (let ((file (or (seq-find #'file-exists-p
+                            (mapcar #'expand-file-name
+                                    (seq-filter #'stringp auth-sources)))
+                  (expand-file-name "~/.authinfo"))))
+    (with-temp-buffer
+      (when (file-exists-p file)
+        (insert-file-contents file))
+      (goto-char (point-min))
+      (flush-lines "^machine zoho-desk login session-cookie ")
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (insert (format "machine zoho-desk login session-cookie password \"%s\"\n"
+                      cookie))
+      (write-region (point-min) (point-max) file nil 'silent))
+    (set-file-modes file #o600)
+    (auth-source-forget-all-cached)))
+
+(defun zoho-desk--refresh-session-cookie-flow (ticket)
+  "Open TICKET in the browser, then prompt for a fresh Cookie header.
+Returns the minimal cookie string, now current and persisted.
+Quitting the prompt (C-g / ESC) returns nil — callers must then
+leave the reply alone.  A paste without the needed cookies aborts
+with an explanatory error."
+  (when-let* ((url (and ticket
+                        (or (zoho-desk--agent-ticket-url ticket)
+                            (alist-get 'webUrl ticket)))))
+    (browse-url url))
+  (let ((input (condition-case nil
+                   (read-string
+                    (concat "Zoho session cookie refresh — in the browser: "
+                            "F12 → Network → click any support request → "
+                            "Request Headers → copy the whole Cookie line: "))
+                 (quit nil))))
+    (when input
+      (let ((cookie (zoho-desk--session-cookie-parse input)))
+        (unless cookie
+          (user-error (concat "Zoho Desk: that paste has no __Secure-iamsdt"
+                              " + crmcsr — copy the full Cookie request"
+                              " header from the Network pane")))
+        (setq zoho-desk--session-cookie cookie)
+        (zoho-desk--persist-session-cookie cookie)
+        cookie))))
+
+;;;###autoload
+(defun zoho-desk-refresh-session-cookie ()
+  "Capture a fresh agent-console session cookie for inline images.
+Opens the current ticket in the browser first (so you are on a
+logged-in page), then prompts for the browser's Cookie request
+header: DevTools (F12) → Network tab → click any request to the
+support host → Request Headers → copy the whole \"Cookie:\" line.
+The needed parts (__Secure-iamsdt and crmcsr) are extracted and
+persisted to authinfo."
+  (interactive)
+  (if (zoho-desk--refresh-session-cookie-flow
+       (or zoho-desk--ticket (ignore-errors (zoho-desk--ticket-at-point))))
+      (message "Zoho Desk: session cookie updated")
+    (message "Zoho Desk: session cookie refresh cancelled")))
 
 ;;;###autoload
 (defun zoho-desk-authorize (code)
@@ -542,16 +670,18 @@ through `zoho-desk--request-async'."
 
 (cl-defun zoho-desk--request-async (method path callback
                                            &key params payload raw-payload
-                                           content-type no-org (retries 1))
+                                           content-type no-org raw (retries 1))
   "Perform METHOD PATH in the background; CALLBACK gets (RESULT ERR).
 The non-blocking counterpart of `zoho-desk--request'; the keyword
 arguments mean the same.  CALLBACK is invoked exactly once, with
 the parsed JSON response and nil, or with nil and an error message
-string.  It may run in an arbitrary buffer, so it must
-`with-current-buffer' its target."
+string.  With RAW non-nil the response body is handed over as
+undecoded bytes instead of parsed JSON (for image downloads).  It
+may run in an arbitrary buffer, so it must `with-current-buffer'
+its target."
   (let ((opts (list :params params :payload payload
                     :raw-payload raw-payload :content-type content-type
-                    :no-org no-org :retries retries)))
+                    :no-org no-org :raw raw :retries retries)))
     (zoho-desk--ensure-token-async
      (lambda (token token-err)
        (cond
@@ -596,7 +726,9 @@ built-in timeout) and guarantees CALLBACK runs exactly once."
                (lambda (status)
                  (let ((code url-http-response-status)
                        (net-error (plist-get status :error))
-                       (body (zoho-desk--response-body)))
+                       (body (if (plist-get opts :raw)
+                                 (zoho-desk--response-body-raw)
+                               (zoho-desk--response-body))))
                    (kill-buffer)
                    (cond
                     (finished)
@@ -610,13 +742,15 @@ built-in timeout) and guarantees CALLBACK runs exactly once."
                             (plist-put (copy-sequence opts)
                                        :retries (1- retries))))
                     ((memq code '(200 201))
-                     (condition-case err
-                         (funcall finish
-                                  (unless (string-empty-p (string-trim body))
-                                    (zoho-desk--parse-json body))
-                                  nil)
-                       (error (funcall finish nil
-                                       (error-message-string err)))))
+                     (if (plist-get opts :raw)
+                         (funcall finish body nil)
+                       (condition-case err
+                           (funcall finish
+                                    (unless (string-empty-p (string-trim body))
+                                      (zoho-desk--parse-json body))
+                                    nil)
+                         (error (funcall finish nil
+                                         (error-message-string err))))))
                     ((eq code 204) (funcall finish nil nil))
                     (t (funcall finish
                                 nil
@@ -1550,6 +1684,7 @@ fetched in the background and stream in."
     (define-key map (kbd "C-c z l") #'zoho-desk-submit-time-log)
     (define-key map (kbd "C-c z a") #'zoho-desk-add-email)
     (define-key map (kbd "C-c z i") #'zoho-desk-insert-image)
+    (define-key map (kbd "C-c z k") #'zoho-desk-refresh-session-cookie)
     (define-key map (kbd "C-c z e") #'zoho-desk-expand-thread-at-point)
     (define-key map (kbd "C-c z c") #'zoho-desk-add-comment)
     (define-key map (kbd "C-c z t") #'zoho-desk-add-time-entry)
@@ -2148,6 +2283,82 @@ COMMENTS and TIME-ENTRIES are passed through to the render."
                   (nthcdr (length prefetch) threads))
           comments time-entries tab))))))
 
+;;;; Inline images
+
+(defvar zoho-desk--inline-image-dir
+  (expand-file-name "zoho-desk-inline-images" temporary-file-directory)
+  "Session cache directory for downloaded inline images.")
+
+(defconst zoho-desk--inline-image-link-re
+  "\\[\\[\\(/api/v1/[^][]*/inlineImages/[^][]+\\)\\]\\]"
+  "Org link whose target is an API-relative inline image.")
+
+(defun zoho-desk--inline-image-file (path)
+  "Cache file name for the inline image at API PATH."
+  (let ((ext (if (string-match "[?&]f=[^&]*\\.\\([A-Za-z0-9]+\\)\\'" path)
+                 (concat "." (downcase (match-string 1 path)))
+               "")))
+    (expand-file-name (concat (md5 path) ext) zoho-desk--inline-image-dir)))
+
+(defun zoho-desk--overlay-inline-image (path file)
+  "Show image FILE over every org link to PATH in the current buffer.
+The links sit in read-only text, so the image goes on an overlay
+instead of the text itself; `evaporate' cleans the overlay up when
+a re-render erases the buffer."
+  (when-let* ((image (ignore-errors
+                       (create-image
+                        file nil nil
+                        :max-width zoho-desk-inline-image-max-width))))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (let ((target (concat "[[" path "]]")))
+          (while (search-forward target nil t)
+            (unless (cl-some (lambda (ov) (overlay-get ov 'zoho-desk-image))
+                             (overlays-at (match-beginning 0)))
+              (let ((ov (make-overlay (match-beginning 0) (match-end 0))))
+                (overlay-put ov 'zoho-desk-image t)
+                (overlay-put ov 'display image)
+                (overlay-put ov 'evaporate t)))))))))
+
+(defun zoho-desk--fetch-inline-image (path file)
+  "Download the inline image at API PATH into FILE, then display it.
+PATH already carries Zoho's et/ha access parameters; the request
+still needs the usual OAuth headers."
+  (let ((buf (current-buffer)))
+    (zoho-desk--request-async
+     "GET" (string-remove-prefix "/api/v1" path)
+     (lambda (data err)
+       (cond
+        (err (message "Zoho Desk: inline image fetch failed: %s" err))
+        ((or (null data) (string-empty-p data)))
+        (t
+         (make-directory zoho-desk--inline-image-dir t)
+         (let ((coding-system-for-write 'binary))
+           (write-region data nil file nil 'silent))
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (zoho-desk--overlay-inline-image path file))))))
+     :raw t)))
+
+(defun zoho-desk--display-inline-images ()
+  "Fetch and overlay the API inline images referenced in the buffer.
+Cached images show immediately; the rest arrive in the background."
+  (when (and zoho-desk-inline-images (display-graphic-p))
+    (let (paths)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (re-search-forward zoho-desk--inline-image-link-re nil t)
+            (push (match-string-no-properties 1) paths))))
+      (dolist (path (delete-dups (nreverse paths)))
+        (let ((file (zoho-desk--inline-image-file path)))
+          (if (file-exists-p file)
+              (zoho-desk--overlay-inline-image path file)
+            (zoho-desk--fetch-inline-image path file)))))))
+
 (defun zoho-desk--render-ticket (buf ticket threads comments time-entries tab)
   "Fill BUF with TICKET's org document and select TAB."
   (with-current-buffer buf
@@ -2164,7 +2375,8 @@ COMMENTS and TIME-ENTRIES are passed through to the render."
     (zoho-desk--normalize-buffer-style)
     (zoho-desk--protect-buffer)
     (zoho-desk--set-tab tab)
-    (zoho-desk--fill-pending-time-log)))
+    (zoho-desk--fill-pending-time-log)
+    (zoho-desk--display-inline-images)))
 
 (defun zoho-desk-open-ticket-at-point ()
   "Open the ticket on the current list line."
@@ -2198,7 +2410,8 @@ when it is gone (e.g. the ticket was refreshed meanwhile)."
           (org-end-of-meta-data t)
           (delete-region (point) (save-excursion (org-end-of-subtree t t)))
           (insert body)
-          (zoho-desk--protect-buffer))))))
+          (zoho-desk--protect-buffer)
+          (zoho-desk--display-inline-images))))))
 
 (defun zoho-desk-expand-thread-at-point ()
   "Fetch the full content of the org thread entry at point."
@@ -2535,6 +2748,122 @@ payload, which attaches the file to that reply's thread."
           (push file files))))
     (delete-dups (nreverse files))))
 
+(defconst zoho-desk--browser-user-agent
+  (concat "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+  "The composer servlet rejects requests without a browser UA.")
+
+(defun zoho-desk--image-content-type (file)
+  "MIME type for image FILE, from its extension."
+  (pcase (downcase (or (file-name-extension file) ""))
+    ((or "jpg" "jpeg") "image/jpeg")
+    ("gif" "image/gif")
+    ("webp" "image/webp")
+    (_ "image/png")))
+
+(defun zoho-desk--composer-upload-image (ticket file cookie)
+  "Upload image FILE through TICKET's portal composer servlet.
+The servlet (ImageUpload.do) answers with an ImageDisplay URL
+whose blockId Zoho's mailer converts into a real cid inline image
+at send time.  COOKIE is the minimal session cookie.  Returns the
+URL, or nil when the servlet refuses — in practice a stale
+session cookie."
+  (let* ((web (or (alist-get 'webUrl ticket)
+                  (user-error "Zoho Desk: ticket has no web URL")))
+         (base-portal
+          (if (string-match
+               "\\`\\(https://[^/]+\\)/\\(?:support\\|portal\\)/\\([^/]+\\)/"
+               web)
+              (cons (match-string 1 web) (match-string 2 web))
+            (user-error "Zoho Desk: cannot derive the portal from %s" web)))
+         (base (car base-portal))
+         (portal (cdr base-portal))
+         (csrf (or (and (string-match "crmcsr=\\([^;]+\\)" cookie)
+                        (match-string 1 cookie))
+                   (user-error "Zoho Desk: session cookie has no crmcsr")))
+         (boundary (format "----zoho-desk-%06x%06x"
+                           (random #xffffff) (random #xffffff)))
+         (body (with-temp-buffer
+                 (set-buffer-multibyte nil)
+                 (insert "--" boundary "\r\n"
+                         (format (concat "Content-Disposition: form-data; "
+                                         "name=\"img_file\"; filename=\"%s\"\r\n")
+                                 (file-name-nondirectory file))
+                         "Content-Type: " (zoho-desk--image-content-type file)
+                         "\r\n\r\n")
+                 (insert-file-contents-literally file nil nil nil)
+                 (goto-char (point-max))
+                 (insert "\r\n--" boundary "\r\n"
+                         "Content-Disposition: form-data; "
+                         "name=\"crmcsrfparam\"\r\n\r\n"
+                         csrf "\r\n"
+                         "--" boundary "--\r\n")
+                 (buffer-string)))
+         (url-request-method "POST")
+         (url-request-data body)
+         ;; The servlet rejects a non-browser User-Agent.  url.el emits
+         ;; its own UA header from `url-user-agent', so set that rather
+         ;; than adding a second (duplicate) header via extra-headers.
+         (url-user-agent zoho-desk--browser-user-agent)
+         ;; Ask for no gzip; the reply is a short URL and
+         ;; `zoho-desk--response-body' does not decompress.
+         (url-mime-encoding-string "identity")
+         (url-request-extra-headers
+          (mapcar (lambda (h)
+                    (cons (car h)
+                          (encode-coding-string (cdr h) 'utf-8)))
+                  `(("Content-Type"
+                     . ,(concat "multipart/form-data; boundary=" boundary))
+                    ("Cookie" . ,cookie)
+                    ("X-ZCSRF-TOKEN" . ,(concat "crmcsrfparam=" csrf))
+                    ("Origin" . ,base)
+                    ("Referer" . ,(concat base "/agent/")))))
+         (buf (url-retrieve-synchronously
+               (format "%s/support/%s/ImageUpload.do?uploadMode=newzeImageUpload"
+                       base portal)
+               t t zoho-desk-request-timeout)))
+    (when buf
+      (with-current-buffer buf
+        (prog1
+            (let ((answer (string-trim (zoho-desk--response-body))))
+              (and (eq url-http-response-status 200)
+                   (string-match-p "\\`https://[^ \n]*ImageDisplay\\?" answer)
+                   answer))
+          (kill-buffer))))))
+
+(defun zoho-desk--upload-reply-images-inline (ticket files)
+  "Upload FILES via the composer servlet for true inline sending.
+Returns an alist of (FILE . URL).  A missing or stale session
+cookie opens the agent console and prompts for a fresh one (see
+`zoho-desk-refresh-session-cookie'); quitting that prompt aborts
+the whole send with the reply buffer untouched."
+  (let ((cookie (zoho-desk--current-session-cookie))
+        (refreshed nil)
+        result)
+    (unless cookie
+      (setq cookie (zoho-desk--refresh-session-cookie-flow ticket)
+            refreshed t)
+      (unless cookie
+        (user-error (concat "Zoho Desk: inline images require a session"
+                            " cookie refresh — reply not sent"))))
+    (dolist (file files)
+      (let ((url (zoho-desk--composer-upload-image ticket file cookie)))
+        (unless url
+          (if refreshed
+              (user-error "Zoho Desk: inline upload failed for %s — reply not sent"
+                          (file-name-nondirectory file))
+            (setq cookie (zoho-desk--refresh-session-cookie-flow ticket)
+                  refreshed t)
+            (unless cookie
+              (user-error (concat "Zoho Desk: inline images require a session"
+                                  " cookie refresh — reply not sent")))
+            (setq url (zoho-desk--composer-upload-image ticket file cookie))
+            (unless url
+              (user-error "Zoho Desk: inline upload failed for %s — reply not sent"
+                          (file-name-nondirectory file)))))
+        (push (cons file url) result)))
+    (nreverse result)))
+
 (defun zoho-desk--email-safe-block-styles (html)
   "Inline the block styles that body-only HTML has no stylesheet for.
 Zoho keeps <pre>, <blockquote> and style attributes intact (only
@@ -2563,27 +2892,56 @@ same theme."
              "padding: 2px 12px\">")
      html t t)))
 
+(defun zoho-desk--rewrite-thread-image-links (org-text)
+  "Turn thread inlineImages org links in ORG-TEXT into img snippets.
+The one src form Zoho's mailer converts to a real cid MIME part
+at send time is its own /threads/.../inlineImages/... URL
+(verified by probing; uploads hrefs and external URLs pass
+through untouched).  So a thread-image link quoted into the reply
+— the incoming images render as exactly these links — reaches the
+recipient as a true inline image.  The et/ha access parameters
+are re-minted on every thread fetch, so links taken from the
+current buffer are valid at send time."
+  (replace-regexp-in-string
+   zoho-desk--inline-image-link-re
+   (lambda (link)
+     (save-match-data
+       (string-match zoho-desk--inline-image-link-re link)
+       (format "@@html:<img src=\"%s%s\">@@"
+               (replace-regexp-in-string "/api/v1\\'" "" zoho-desk-base-url)
+               (replace-regexp-in-string "&" "&amp;"
+                                         (match-string 1 link)))))
+   org-text))
+
 (defun zoho-desk--org-to-html (org-text images)
-  "Export ORG-TEXT to body-only HTML, with IMAGES as attachment markers.
-True inline embedding is impossible through the public API: Zoho
-strips cid: and data: img references at send time, and its own
-inline mechanism (ImageDisplay blockId URLs converted to MIME cid
-parts) is only reachable with a browser session.  So each image
-is sent as a regular attachment and its img tag becomes a
-\"[image: NAME -- attached]\" marker in the body.  Single
-newlines are kept as line breaks so the email reads like the
-compose buffer."
+  "Export ORG-TEXT to body-only HTML.
+IMAGES is an alist of (FILE . INLINE-URL) for the [[file:...]]
+images in the reply.  A file with an INLINE-URL becomes an <img>
+pointing at it — Zoho's mailer converts its own composer URLs
+into real cid inline images at send time.  A file with nil falls
+back to a \"[image: NAME -- attached]\" marker (the file rides
+along as an attachment), since Zoho strips cid: and data: imgs
+from API sends.  Images already inline in a thread are handled by
+`zoho-desk--rewrite-thread-image-links'.  Single newlines are
+kept as line breaks so the email reads like the compose buffer."
   (require 'ox-html)
   (let ((html (zoho-desk--email-safe-block-styles
-               (org-export-string-as org-text 'html t
-                                     '(:preserve-breaks t)))))
-    (dolist (file images html)
-      (setq html (replace-regexp-in-string
-                  (concat "<img [^>]*src=\"\\(?:file://\\)?"
-                          (regexp-quote file) "\"[^>]*>")
-                  (format "<em>[image: %s &mdash; attached]</em>"
-                          (file-name-nondirectory file))
-                  html t t)))))
+               (org-export-string-as
+                (zoho-desk--rewrite-thread-image-links org-text)
+                'html t '(:preserve-breaks t)))))
+    (dolist (entry images html)
+      (let ((file (car entry))
+            (inline-url (cdr entry)))
+        (setq html (replace-regexp-in-string
+                    (concat "<img [^>]*src=\"\\(?:file://\\)?"
+                            (regexp-quote file) "\"[^>]*>")
+                    (if inline-url
+                        (format "<img src=\"%s\" style=\"max-width: 100%%;\">"
+                                (replace-regexp-in-string
+                                 "&" "&amp;" inline-url))
+                      (format "<em>[image: %s &mdash; attached]</em>"
+                              (file-name-nondirectory file)))
+                    html t t))))))
 
 (defun zoho-desk--clipboard-image-data ()
   "Return raw PNG data from the clipboard, or nil."
@@ -2682,8 +3040,17 @@ image links are embedded and attached."
                     choice))))
       (let* ((buf (current-buffer))
              (ticket-number (alist-get 'ticketNumber zoho-desk--ticket))
-             (images (and zoho-desk-reply-html
-                          (zoho-desk--reply-image-files body)))
+             (image-files (and zoho-desk-reply-html
+                               (zoho-desk--reply-image-files body)))
+             ;; Inline path: upload through the composer servlet up
+             ;; front (may prompt for a session cookie refresh and
+             ;; abort the send — nothing has gone out yet).
+             (inline-urls (and image-files zoho-desk-send-inline-images
+                               (zoho-desk--upload-reply-images-inline
+                                zoho-desk--ticket image-files)))
+             (images (or inline-urls
+                         (mapcar (lambda (file) (cons file nil))
+                                 image-files)))
              (send
               (lambda (upload-ids)
                 (zoho-desk--request-async
@@ -2723,10 +3090,11 @@ image links are embedded and attached."
                            (when upload-ids
                              `(("uploads" . ,upload-ids))))))))
         (message "Sending reply to %s…" to)
-        (if (null images)
+        (if (or (null image-files) inline-urls)
+            ;; No images, or all of them inlined — nothing to attach.
             (funcall send nil)
           (zoho-desk--request-all-async
-           (mapcar #'zoho-desk--upload-spec images)
+           (mapcar #'zoho-desk--upload-spec image-files)
            (lambda (responses err)
              (let ((ids (mapcar (lambda (r) (alist-get 'id r)) responses)))
                (cond

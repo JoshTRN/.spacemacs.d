@@ -93,4 +93,5 @@
    windows-scripts
    yaml
    zoho-tickets
+   zoho-projects
    ))

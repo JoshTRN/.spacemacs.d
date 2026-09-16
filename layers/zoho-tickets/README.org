@@ -17,6 +17,15 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
     blocks, lists and links keep their formatting on ingest
     (plain-text fallback when pandoc is not installed; see
     =zoho-desk-pandoc-program=)
+  - Inline images in incoming emails are fetched through the API
+    in the background and displayed in place in the ticket buffer
+    (=zoho-desk-inline-images=, scaled to
+    =zoho-desk-inline-image-max-width= pixels)
+  - Outgoing replies send images *truly inline* (real cid MIME
+    parts, not attachments): pasted screenshots via the composer
+    servlet (=zoho-desk-send-inline-images=; needs the browser
+    session cookie, refreshed on demand), quoted thread images
+    over plain OAuth
   - All API traffic runs in the background — Emacs never blocks on
     the network. Fetches show a =Fetching …= placeholder that fills
     in when the API answers; replies, comments and time entries send
@@ -104,17 +113,21 @@ Sidebar counts show how many tickets have been fetched for a view
 
 * Key bindings
 
-| Key Binding | Description                                |
-|-------------+--------------------------------------------|
-| ~SPC o z z~ | Open the dashboard                         |
-| ~SPC o z u~ | Open a ticket from its URL (auto-switches department) |
-| ~SPC o z f~ | Quickfind: full ticket number jumps, else helm fuzzy find |
-| ~SPC o z a~ | One-time OAuth grant-code exchange         |
-| ~SPC o z t~ | Add a time entry to a ticket               |
-| ~SPC o z l~ | Log org-clocked time of the entry at point |
-| ~SPC o z i~ | Start the ticket timer (needs a ticket at point) |
-| ~SPC o z o~ | Finish the ticket timer → fill its New Time Log |
-| ~SPC o z k~ | Cancel the ticket timer                    |
+All global commands live under the shared zoho prefix ~SPC a z~,
+tickets on ~SPC a z t~ (the =zoho-projects= layer sits next door on
+~SPC a z p~):
+
+| Key Binding   | Description                                |
+|---------------+--------------------------------------------|
+| ~SPC a z t d~ | Open the dashboard                         |
+| ~SPC a z t u~ | Open a ticket from its URL (auto-switches department) |
+| ~SPC a z t f~ | Quickfind: full ticket number jumps, else helm fuzzy find |
+| ~SPC a z t a~ | One-time OAuth grant-code exchange         |
+| ~SPC a z t t~ | Add a time entry to a ticket               |
+| ~SPC a z t l~ | Log org-clocked time of the entry at point |
+| ~SPC a z t i~ | Start the ticket timer (needs a ticket at point) |
+| ~SPC a z t o~ | Finish the ticket timer → fill its New Time Log |
+| ~SPC a z t k~ | Cancel the ticket timer                    |
 
 Views sidebar (left pane):
 
@@ -158,6 +171,8 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, y~      | ~C-c z y~    | Copy agent-console ticket URL            |
 | ~, #~      | ~C-c z #~    | Copy ticket number (=#ART-364= form)     |
 | ~, a~      | ~C-c z a~    | Add org contact email to the To line     |
+| ~, i e~    | ~C-c z i~    | Insert clipboard image into the reply    |
+| ~, i k~    | ~C-c z k~    | Refresh the inline-image session cookie  |
 | ~, b~      | ~C-c z o~    | Open in browser                          |
 | ~, r~      | ~C-c z g~    | Refresh ticket                           |
 
@@ -198,14 +213,39 @@ all render in the email. =#+begin_quote= blocks arrive as italicized
 left-bordered blocks and =#+begin_src= blocks as monospace boxes with
 syntax highlighting (htmlize inline colors from the current theme, on
 a background matching it). Zoho preserves these tags and inline
-styles; only inline images are stripped (see below). ~, i e~ (or ~C-c z i~) embeds the image
+styles. ~, i e~ (or ~C-c z i~) embeds the image
 currently in the clipboard (screenshot it, then ~, i e~); with a
 prefix argument it prompts for a file instead. The image lands in
 the reply as a =[[file:...]]= link (shown inline in the buffer);
-on send it is embedded in the HTML as a base64 data URI
-and also uploaded as a regular attachment, so clients that block
-inline data images still receive the file. Set
+on send it is uploaded through the agent console's composer
+servlet and sent *truly inline* — Zoho's mailer converts the
+composer URL into a real cid MIME part, so the recipient sees the
+image in the email body (=zoho-desk-send-inline-images=, default
+on; when nil, images fall back to regular attachments with
+=[image: ... — attached]= markers, since Zoho strips =cid:= and
+=data:= images from plain API sends). Set
 =zoho-desk-reply-html= to nil for plain-text replies.
+
+Inline sending needs the browser's agent-console session cookie —
+the composer servlet has no OAuth equivalent. When the cookie is
+missing or expired, the send is *refused* (nothing goes out, the
+reply stays put): the ticket opens in your browser and the
+minibuffer prompts for a refresh. In the browser: =F12= → Network
+tab → click any request to the support host → Request Headers →
+copy the whole =Cookie:= line and paste it at the prompt. The two
+needed cookies (=__Secure-iamsdt= — HttpOnly, hence DevTools —
+and =crmcsr=) are extracted and saved to authinfo; sessions last
+days-to-weeks, so this is rare. Quitting the prompt just aborts
+the send with a reminder. ~, i k~ (or ~C-c z k~,
+=zoho-desk-refresh-session-cookie=) runs the same refresh
+proactively.
+
+Images that are already in the ticket need none of that: an
+incoming email's inline images display in the thread as
+=[[/api/v1/.../inlineImages/...]]= links, and yanking such a link
+into your reply re-sends that image truly inline over plain
+OAuth. Use it to quote a customer's screenshot back with
+commentary.
 
 Time logs: the Time Logs tab lists the ticket's time entries as
 org subheadings, newest as returned by the API, each carrying its
@@ -226,17 +266,17 @@ background and refreshes the ticket so the new entry appears in
 the list.
 
 Ticket timer: ~T~ on a ticket (table line or open ticket, also
-~, T~ / ~C-c z T~ / ~SPC o z i~) clocks the =posframe-timer=
+~, T~ / ~C-c z T~ / ~SPC a z t i~) clocks the =posframe-timer=
 free clock in against it — the floating clock counts up with the
 ticket number and subject above it, so what you're billing is
 always on screen. The timer follows the ticket, not the buffer:
 open other tickets, close the buffer, work anywhere. When done,
-~SPC o z o~ (or =posframe-timer='s own clock-out, ~SPC a T o~)
+~SPC a z t o~ (or =posframe-timer='s own clock-out, ~SPC a T o~)
 stops the clock from wherever you are, brings the ticket up on
 its Time Logs tab and fills the New Time Log for you — Executed
 set to when the timer started, Hours / Minutes / Seconds set to
 the elapsed time, point in the description field. Describe the
-work and ~, l~ submits as usual. ~SPC o z k~ (or ~SPC a T k~)
+work and ~, l~ submits as usual. ~SPC a z t k~ (or ~SPC a T k~)
 discards the timer without logging anything. Requires the
 =posframe-timer= layer.
 
@@ -263,7 +303,7 @@ support address if sending fails.
    :END:
    #+end_example
 2. Clock time on the entry as usual.
-3. =M-x zoho-desk-log-time-from-org= (~SPC o z l~) on the entry posts the
+3. =M-x zoho-desk-log-time-from-org= (~SPC a z t l~) on the entry posts the
    clocked minutes as a Zoho Desk time entry.
 
 * API notes
