@@ -13,9 +13,13 @@
 ;;                                are OR-ed: the table shows the union of
 ;;                                their tickets.
 ;; - RET on a ticket              org-mode ticket document with Overview,
-;;                                Thread and Comments tabs
+;;                                Thread, Comments and Time Logs tabs
 ;; - `zoho-desk-add-time-entry'   post a time entry to a ticket
 ;; - `zoho-desk-log-time-from-org' send org-clocked time to a ticket
+;; - `zoho-desk-start-ticket-timer' clock the posframe timer in against
+;;                                a ticket; `zoho-desk-finish-ticket-timer'
+;;                                (from anywhere) fills the ticket's New
+;;                                Time Log fields with the elapsed time
 ;; - `zoho-desk-authorize'        one-time exchange of a self-client
 ;;                                grant code for a refresh token
 ;;
@@ -56,6 +60,12 @@
 (defvar url-http-end-of-headers)
 (defvar url-http-response-status)
 
+(declare-function posframe-timer-clock-in "posframe-timer")
+(declare-function posframe-timer-clock-out "posframe-timer")
+(declare-function posframe-timer-clock-cancel "posframe-timer")
+
+(declare-function outline-show-subtree "outline")
+
 (declare-function org-mode "org")
 (declare-function org-entry-get "org")
 (declare-function org-get-heading "org")
@@ -63,8 +73,13 @@
 (declare-function org-end-of-meta-data "org")
 (declare-function org-end-of-subtree "org")
 (declare-function org-narrow-to-subtree "org")
+(declare-function org-read-date "org")
+(declare-function org-time-string-to-time "org")
+(declare-function org-time-stamp "org")
 (declare-function org-clock-sum-current-item "org-clock")
 (declare-function org-show-all "org")
+(declare-function org-fold-hide-subtree "org-fold")
+(declare-function outline-hide-subtree "outline")
 (declare-function org-display-inline-images "org")
 (declare-function org-export-string-as "ox")
 (declare-function evil-set-initial-state "evil-core")
@@ -134,6 +149,12 @@ Tickets\" is \"My Cases\" in the API, \"All Tickets\" is \"All Cases\"."
   "Number of tickets fetched per view and page."
   :type 'integer)
 
+(defcustom zoho-desk-quickfind-limit 300
+  "How many of a department's newest tickets quickfind offers.
+`zoho-desk-quickfind' fetches this many tickets (in parallel
+pages of 100) as the helm fuzzy-find candidate pool."
+  :type 'integer)
+
 (defcustom zoho-desk-sidebar-width 32
   "Width of the views sidebar in the dashboard."
   :type 'integer)
@@ -175,6 +196,14 @@ shown as \"[image: ...]\" markers in the body (the public API
 cannot embed true inline images).  When nil, the reply is sent as
 plain text."
   :type 'boolean)
+
+(defcustom zoho-desk-pandoc-program "pandoc"
+  "Pandoc executable used to convert incoming HTML to org markup.
+With it, thread bodies, descriptions and comments keep their
+formatting on ingest — bold, tables, code blocks, links — as org
+markup.  When nil, or when the program is not installed, they
+degrade to the plain-text rendering."
+  :type '(choice (string :tag "Program") (const :tag "Disabled" nil)))
 
 (defcustom zoho-desk-department-reply-from nil
   "Alist mapping departmentId to the support address used as From.
@@ -704,6 +733,69 @@ content, ready to retry)."
       (buffer-substring-no-properties (point-min) (point-max))))
    (t (replace-regexp-in-string "<[^>]*>" "" html))))
 
+(defun zoho-desk--wrap-pre-code (html)
+  "Wrap bare <pre> contents in <code> tags in HTML.
+Pandoc only reads <pre><code> as a code block; a bare <pre> (what
+ox-html and most mail clients emit) collapses to a plain
+paragraph.  The tag is rebuilt with only the block's language,
+recovered from an ox-html-style \"src-LANG\" class (Zoho mangles
+it to \"x_NNNsrc-LANG\") — every other attribute is dropped, so
+inline styles cannot leak into the org block's header line."
+  (replace-regexp-in-string
+   "</pre>" "</code></pre>"
+   (replace-regexp-in-string
+    "<pre\\([^>]*\\)>"
+    (lambda (tag)
+      ;; save-match-data: replace-regexp-in-string needs its own
+      ;; match data intact after this function returns.
+      (save-match-data
+        (if (string-match "class=\"[^\"]*src-\\([A-Za-z0-9_+-]+\\)" tag)
+            (format "<pre class=\"%s\"><code>" (match-string 1 tag))
+          "<pre><code>")))
+    html)))
+
+(defun zoho-desk--strip-org-linebreaks (org)
+  "Remove the trailing \\\\ hard line breaks pandoc makes of <br>.
+The newline stays, so the visual line break survives; only inside
+verbatim blocks (example, src, export) are the backslashes left
+alone, since there they are content.  Markup blocks like quote
+and center hold prose, so theirs are stripped too."
+  (with-temp-buffer
+    (insert org)
+    (goto-char (point-min))
+    (let ((literal nil))
+      (while (not (eobp))
+        (cond
+         ((looking-at-p "[ \t]*#\\+begin_\\(example\\|src\\|export\\)\\_>")
+          (setq literal t))
+         ((looking-at-p "[ \t]*#\\+end_\\(example\\|src\\|export\\)\\_>")
+          (setq literal nil))
+         ((and (not literal)
+               (re-search-forward "\\\\\\\\$" (line-end-position) t))
+          (replace-match "")))
+        (forward-line 1)))
+    (buffer-string)))
+
+(defun zoho-desk--html-to-org (html)
+  "Convert HTML to org markup via `zoho-desk-pandoc-program'.
+Falls back to the plain-text rendering when pandoc is disabled,
+missing, or chokes on the input."
+  (or (and (stringp html)
+           zoho-desk-pandoc-program
+           (executable-find zoho-desk-pandoc-program)
+           (with-temp-buffer
+             (insert (zoho-desk--wrap-pre-code html))
+             (let ((coding-system-for-write 'utf-8)
+                   (coding-system-for-read 'utf-8))
+               (when (zerop (call-process-region
+                             (point-min) (point-max)
+                             zoho-desk-pandoc-program t '(t nil) nil
+                             "-f" "html-auto_identifiers" "-t" "org"))
+                 (zoho-desk--strip-org-linebreaks
+                  (buffer-substring-no-properties (point-min)
+                                                  (point-max)))))))
+      (zoho-desk--html-to-text html)))
+
 (defun zoho-desk--org-body (text)
   "Indent TEXT two spaces so it can never form org headings.
 Trailing whitespace is stripped and empty lines stay truly empty."
@@ -712,8 +804,8 @@ Trailing whitespace is stripped and empty lines stay truly empty."
     (concat (replace-regexp-in-string "^." "  \\&" clean) "\n")))
 
 (defun zoho-desk--html-to-org-body (html)
-  "Convert HTML to indented plain text usable as an org entry body."
-  (zoho-desk--org-body (zoho-desk--html-to-text html)))
+  "Convert HTML to indented org markup usable as an org entry body."
+  (zoho-desk--org-body (zoho-desk--html-to-org html)))
 
 (defun zoho-desk--ticket-at-point ()
   "Return the ticket alist relevant to the current buffer/point."
@@ -963,6 +1055,7 @@ Falls back to the first starred view, then the first view."
     (define-key map (kbd "RET") #'zoho-desk-open-ticket-at-point)
     (define-key map (kbd "g") #'zoho-desk-refresh-table)
     (define-key map (kbd "t") #'zoho-desk-add-time-entry)
+    (define-key map (kbd "T") #'zoho-desk-start-ticket-timer)
     (define-key map (kbd "w") #'zoho-desk-copy-org-snippet)
     (define-key map (kbd "o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "]") #'zoho-desk-next-page)
@@ -1168,6 +1261,236 @@ cannot be derived."
     (kill-new url)
     (message "%s copied to kill ring" url)))
 
+;;;; Opening a ticket from its URL
+
+(defvar zoho-desk--ticket-url-history nil
+  "Minibuffer history for `zoho-desk-open-ticket-url'.")
+
+(defun zoho-desk--ticket-id-from-url (url)
+  "Return the ticket id embedded in URL, or nil.
+Recognizes the agent-console form (…/tickets/details/<id>) and
+falls back to the first run of 15 or more digits, which covers
+portal links and anything else carrying the raw ticket id."
+  (cond
+   ((string-match "/tickets/details/\\([0-9]+\\)" url)
+    (match-string 1 url))
+   ((string-match "\\([0-9]\\{15,\\}\\)" url)
+    (match-string 1 url))))
+
+(defun zoho-desk--department-from-url (url)
+  "Return the department alist named by URL's agent-console slug, or nil.
+The slug between the portal name and /tickets/ is the
+department's sanitizedName, the same field
+`zoho-desk--agent-ticket-url' writes."
+  (when (string-match "/agent/[^/]+/\\([^/]+\\)/tickets/" url)
+    (let ((slug (match-string 1 url)))
+      (seq-find (lambda (d)
+                  (equal (alist-get 'sanitizedName d) slug))
+                (zoho-desk--ensure-departments)))))
+
+(defun zoho-desk--ticket-url-in-kill-ring ()
+  "Return the newest kill when it looks like a Zoho ticket URL."
+  (when-let* ((kill (ignore-errors
+                      (substring-no-properties (current-kill 0 t)))))
+    (let ((kill (string-trim kill)))
+      (and (string-match-p "\\`https?://" kill)
+           (zoho-desk--ticket-id-from-url kill)
+           kill))))
+
+(defun zoho-desk--switch-department (department-id)
+  "Make DEPARTMENT-ID the session department unless it already is.
+Resets the dashboard's per-department state and, when the
+dashboard is on screen, redraws it for the new department."
+  (let ((id (format "%s" department-id)))
+    (unless (equal id (format "%s" (or zoho-desk-department-id
+                                       zoho-desk--department
+                                       "")))
+      (setq zoho-desk--department id)
+      ;; The defcustom outranks the session variable in
+      ;; `zoho-desk--department-params', so when one is configured it
+      ;; must follow the switch too (this session only, never saved).
+      (when zoho-desk-department-id
+        (setq zoho-desk-department-id id))
+      (setq zoho-desk--views nil
+            zoho-desk--selected-view-ids nil
+            zoho-desk--from 0)
+      (clrhash zoho-desk--view-counts)
+      (when (get-buffer-window zoho-desk--views-buffer-name)
+        (zoho-desk-dashboard))
+      (let ((department (seq-find
+                         (lambda (d)
+                           (equal (format "%s" (alist-get 'id d)) id))
+                         zoho-desk--departments)))
+        (message "Zoho Desk: switched to department %s"
+                 (or (alist-get 'name department) id))))))
+
+;;;###autoload
+(defun zoho-desk-open-ticket-url (url)
+  "Open the ticket named by URL, switching departments when needed.
+URL is read from the minibuffer, prefilled from the kill ring
+when the newest kill looks like a ticket URL.  The agent-console
+form (…/agent/<portal>/<department>/tickets/details/<id>) names
+its department directly; any other URL carrying the ticket's long
+numeric id works too, at the cost of one extra lookup to learn
+the department from the ticket itself."
+  (interactive
+   (list (read-string "Zoho ticket URL: "
+                      (zoho-desk--ticket-url-in-kill-ring)
+                      'zoho-desk--ticket-url-history)))
+  (let* ((id (or (zoho-desk--ticket-id-from-url url)
+                 (user-error "No ticket id found in %s" url)))
+         (department (zoho-desk--department-from-url url)))
+    (if department
+        (progn
+          (zoho-desk--switch-department (alist-get 'id department))
+          (zoho-desk--show-ticket id))
+      ;; No department slug in the URL: fetch the ticket first so the
+      ;; department switch (and any dashboard redraw) happens before
+      ;; the ticket window pops up.
+      (message "Zoho Desk: looking up ticket %s…" id)
+      (zoho-desk--request-async
+       "GET" (format "/tickets/%s" id)
+       (lambda (ticket err)
+         (if err
+             (message "Zoho Desk: %s" err)
+           (when-let* ((dept-id (alist-get 'departmentId ticket)))
+             (zoho-desk--switch-department dept-id))
+           (zoho-desk--show-ticket id
+                                   (alist-get 'ticketNumber ticket))))))))
+
+;;;; Quickfind
+
+(declare-function helm "ext:helm")
+(declare-function helm-make-source "ext:helm-source")
+(declare-function helm-make-actions "ext:helm-lib")
+
+(defun zoho-desk--jump-to-ticket-number (number)
+  "Look up the ticket whose number is NUMBER and open it.
+The search spans all departments; the session department is
+switched to the ticket's own when it differs."
+  (message "Zoho Desk: looking up #%s…" number)
+  (zoho-desk--request-async
+   "GET" "/tickets/search"
+   (lambda (result err)
+     (cond
+      (err (message "Zoho Desk: %s" err))
+      ((null (alist-get 'data result))
+       (message "Zoho Desk: no ticket #%s" number))
+      (t (let ((ticket (car (alist-get 'data result))))
+           ;; Leave the url.el sentinel context before touching windows.
+           (run-at-time
+            0 nil
+            (lambda ()
+              (when-let* ((department (alist-get 'departmentId ticket)))
+                (zoho-desk--switch-department department))
+              (zoho-desk--show-ticket (alist-get 'id ticket)
+                                      (alist-get 'ticketNumber ticket))))))))
+   :params `(("ticketNumber" ,number) ("limit" 1))))
+
+(defun zoho-desk--quickfind-tickets-async (department-id callback)
+  "Fetch DEPARTMENT-ID's newest tickets for the quickfind pool.
+Up to `zoho-desk-quickfind-limit' tickets are fetched as parallel
+pages; CALLBACK gets (TICKETS ERR)."
+  (zoho-desk--request-all-async
+   (mapcar (lambda (from)
+             `("GET" "/tickets"
+               :params (("departmentId" ,department-id)
+                        ("include" "contacts,assignee")
+                        ("sortBy" "-createdTime")
+                        ("limit" 100)
+                        ("from" ,from))
+               :soft-errors t))
+           (number-sequence 0 (1- (max 100 zoho-desk-quickfind-limit)) 100))
+   (lambda (pages err)
+     (if err
+         (funcall callback nil err)
+       (let ((seen (make-hash-table :test #'equal))
+             (tickets nil))
+         (dolist (page pages)
+           (dolist (ticket (alist-get 'data page))
+             (let ((id (alist-get 'id ticket)))
+               (unless (gethash id seen)
+                 (puthash id t seen)
+                 (push ticket tickets)))))
+         (funcall callback (nreverse tickets) nil))))))
+
+(defun zoho-desk--quickfind-candidate (ticket)
+  "Return TICKET's helm candidate as a (DISPLAY . TICKET) pair."
+  (cons (format "%-12s %-14s %-20s %s"
+                (propertize (format "#%s"
+                                    (or (alist-get 'ticketNumber ticket) "?"))
+                            'face 'zoho-desk-accent)
+                (or (alist-get 'status ticket) "-")
+                (truncate-string-to-width (zoho-desk--contact-name ticket)
+                                          20 nil nil t)
+                (or (alist-get 'subject ticket) ""))
+        ticket))
+
+(defun zoho-desk--quickfind-helm (tickets &optional input)
+  "Fuzzy-find among TICKETS with helm; INPUT seeds the pattern."
+  (require 'helm)
+  (helm :sources
+        (helm-make-source "Zoho tickets" 'helm-source-sync
+          :candidates (mapcar #'zoho-desk--quickfind-candidate tickets)
+          :fuzzy-match t
+          :candidate-number-limit (max 500 zoho-desk-quickfind-limit)
+          :action
+          (helm-make-actions
+           "Open ticket"
+           (lambda (ticket)
+             (zoho-desk--show-ticket (alist-get 'id ticket)
+                                     (alist-get 'ticketNumber ticket)))
+           "Open in browser"
+           (lambda (ticket)
+             (browse-url (or (zoho-desk--agent-ticket-url ticket)
+                             (alist-get 'webUrl ticket)
+                             (user-error "No web URL on this ticket"))))))
+        :input input
+        :prompt "Ticket: "
+        :buffer "*helm zoho tickets*"))
+
+;;;###autoload
+(defun zoho-desk-quickfind (query)
+  "Jump straight to a ticket by number, or helm-fuzzy-find one.
+A QUERY of the whole-ticket-number form (\"#ART-364\", \"ART-364\"
+or \"#364\") opens that ticket directly, switching departments to
+the ticket's own when needed.  Any other QUERY — including none —
+prompts for a department and fuzzy-finds over its newest
+`zoho-desk-quickfind-limit' tickets, with QUERY as the initial
+helm pattern."
+  (interactive "sTicket (#ART-364 jumps, anything else fuzzy-finds): ")
+  (let ((query (string-trim query)))
+    (if (string-match-p "\\`\\(?:#?[A-Za-z]+-[0-9]+\\|#[0-9]+\\)\\'" query)
+        (zoho-desk--jump-to-ticket-number (string-remove-prefix "#" query))
+      (let* ((departments (zoho-desk--ensure-departments))
+             (current-id (format "%s" (or zoho-desk-department-id
+                                          zoho-desk--department
+                                          "")))
+             (default (seq-find (lambda (d)
+                                  (equal (format "%s" (alist-get 'id d))
+                                         current-id))
+                                departments))
+             (choice (completing-read
+                      "Zoho department: "
+                      (mapcar (lambda (d) (alist-get 'name d)) departments)
+                      nil t nil nil (alist-get 'name default)))
+             (department (seq-find (lambda (d)
+                                     (equal (alist-get 'name d) choice))
+                                   departments)))
+        (zoho-desk--switch-department (alist-get 'id department))
+        (message "Zoho Desk: fetching tickets of %s…" choice)
+        (zoho-desk--quickfind-tickets-async
+         (format "%s" (alist-get 'id department))
+         (lambda (tickets err)
+           (cond
+            (err (message "Zoho Desk: %s" err))
+            ((null tickets)
+             (message "Zoho Desk: no tickets in %s" choice))
+            ;; helm runs its own minibuffer loop; don't start it from
+            ;; inside the url.el sentinel.
+            (t (run-at-time 0 nil #'zoho-desk--quickfind-helm tickets
+                            (unless (string-empty-p query) query))))))))))
+
 ;;;; Dashboard layout
 
 ;;;###autoload
@@ -1222,45 +1545,68 @@ fetched in the background and stream in."
     (define-key map (kbd "C-c z 1") #'zoho-desk-tab-overview)
     (define-key map (kbd "C-c z 2") #'zoho-desk-tab-thread)
     (define-key map (kbd "C-c z 3") #'zoho-desk-tab-comments)
+    (define-key map (kbd "C-c z 4") #'zoho-desk-tab-time-logs)
     (define-key map (kbd "C-c z s") #'zoho-desk-send-reply)
+    (define-key map (kbd "C-c z l") #'zoho-desk-submit-time-log)
     (define-key map (kbd "C-c z a") #'zoho-desk-add-email)
     (define-key map (kbd "C-c z i") #'zoho-desk-insert-image)
     (define-key map (kbd "C-c z e") #'zoho-desk-expand-thread-at-point)
     (define-key map (kbd "C-c z c") #'zoho-desk-add-comment)
     (define-key map (kbd "C-c z t") #'zoho-desk-add-time-entry)
+    (define-key map (kbd "C-c z T") #'zoho-desk-start-ticket-timer)
     (define-key map (kbd "C-c z g") #'zoho-desk-refresh-ticket)
     (define-key map (kbd "C-c z o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "C-c z w") #'zoho-desk-copy-org-snippet)
     (define-key map (kbd "C-c z y") #'zoho-desk-copy-ticket-url)
     (define-key map (kbd "C-c z #") #'zoho-desk-copy-ticket-number)
+    ;; TAB cycles the input fields when point is in one and keeps its
+    ;; org folding role everywhere else; C-c . opens the org date
+    ;; picker on the Executed field.
+    (define-key map (kbd "M-n") #'zoho-desk-next-field)
+    (define-key map (kbd "M-p") #'zoho-desk-previous-field)
+    (define-key map (kbd "C-c .") #'zoho-desk-org-timestamp-dwim)
     map))
 
 (defvar-local zoho-desk--current-tab nil
   "Heading of the currently narrowed tab, nil for Overview.")
 
+(defvar-local zoho-desk--tab-padding-overlay nil
+  "Overlay drawing blank-line padding above a narrowed tab's heading.")
+
 (defconst zoho-desk--tabs
   '(("Overview" . nil)
     ("Thread" . "Email Thread")
-    ("Comments" . "Comments"))
+    ("Comments" . "Comments")
+    ("Time Logs" . "Time Logs"))
   "Tab labels and the top-level org heading each narrows to.")
 
 (defvar-local zoho-desk--threads nil
   "Thread list of the ticket in this buffer, newest first.")
 
 (defun zoho-desk--input-field-matcher (limit)
-  "Font-lock matcher for the reply input field backgrounds.
-Matches the next stretch of the To address or reply body before
-LIMIT.  Registered with the `append' override, so faces org has
-already applied — src block and quote backgrounds included — keep
+  "Font-lock matcher for the input field backgrounds.
+Matches the next stretch of the To address, reply body, Executed
+time, duration values or time log description before LIMIT.
+Registered with the `append' override, so faces org has already
+applied — src block and quote backgrounds included — keep
 precedence over the field background."
   (let* ((to (zoho-desk--reply-to-field))
+         (executed (zoho-desk--time-executed-field))
          (fields (delq nil
-                       ;; The To chunk takes in its line's newline so
-                       ;; the `:extend' background runs to the window
-                       ;; edge; the body field already ends with its
-                       ;; own newline, just before the end separator's.
+                       ;; The full-line fields take in their line's
+                       ;; newline so the `:extend' background runs to
+                       ;; the window edge; the duration values only
+                       ;; paint their digits, and the body fields
+                       ;; already end with their own newline, just
+                       ;; before the end separator's.
                        (list (and to (cons (car to) (1+ (cdr to))))
-                             (zoho-desk--reply-body-field))))
+                             (zoho-desk--reply-body-field)
+                             (and executed
+                                  (cons (car executed) (1+ (cdr executed))))
+                             (zoho-desk--duration-field 'hours)
+                             (zoho-desk--duration-field 'minutes)
+                             (zoho-desk--duration-field 'seconds)
+                             (zoho-desk--time-body-field))))
          hit)
     (dolist (field fields)
       (let ((start (max (point) (car field)))
@@ -1275,11 +1621,11 @@ precedence over the field background."
 
 (defconst zoho-desk--input-font-lock-keywords
   '((zoho-desk--input-field-matcher (0 'zoho-desk-input append)))
-  "Font-lock keywords painting the reply input field backgrounds.
+  "Font-lock keywords painting the input field backgrounds.
 Appended after org's own keywords by
 `zoho-desk-ticket-minor-mode', with the `append' face override, so
 the field background sits under whatever org fontifies inside the
-reply — code blocks stay darker than the field.")
+fields — code blocks stay darker than the field.")
 
 (define-minor-mode zoho-desk-ticket-minor-mode
   "Commands and tabs on top of an org-mode Zoho ticket document.
@@ -1322,21 +1668,50 @@ reply — code blocks stay darker than the field.")
                   'keymap (zoho-desk--tab-keymap (cdr tab))))
     zoho-desk--tabs
     " ")
-   (propertize "   (click, C-c z 1-3, or gt)" 'face 'shadow)))
+   (propertize "   (click, C-c z 1-4, or gt)" 'face 'shadow)))
 
 (defun zoho-desk--set-tab (heading)
   "Narrow the ticket buffer to HEADING, or widen when nil."
   (widen)
+  (when zoho-desk--tab-padding-overlay
+    (delete-overlay zoho-desk--tab-padding-overlay)
+    (setq zoho-desk--tab-padding-overlay nil))
   (setq zoho-desk--current-tab heading)
   (goto-char (point-min))
   (when heading
     (if (re-search-forward (concat "^\\* " (regexp-quote heading) "$") nil t)
         (progn (beginning-of-line)
                (org-narrow-to-subtree)
-               (goto-char (point-min)))
+               (goto-char (point-min))
+               ;; Narrowing leaves the heading flush against the
+               ;; header line; give it the same breathing room the
+               ;; Overview's real blank lines provide, without
+               ;; touching buffer text.
+               (setq zoho-desk--tab-padding-overlay
+                     (make-overlay (point-min) (point-min)))
+               (overlay-put zoho-desk--tab-padding-overlay
+                            'before-string "\n\n"))
       (message "No %s section in this ticket" heading)))
   (if (fboundp 'org-fold-show-all) (org-fold-show-all) (org-show-all))
+  (zoho-desk--fold-time-log-entries)
   (force-mode-line-update))
+
+(defun zoho-desk--fold-time-log-entries ()
+  "Collapse every entry under the Time Logs heading.
+Tab switches unfold the whole document, so this runs after each
+one: the time logs (New Time Log included) stay a compact index
+until an entry is opened by hand (TAB on its heading)."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^\\* Time Logs$" nil t)
+      (beginning-of-line)
+      (let ((end (save-excursion (org-end-of-subtree t t) (point))))
+        (while (re-search-forward "^\\*\\* " end t)
+          (beginning-of-line)
+          (if (fboundp 'org-fold-hide-subtree)
+              (org-fold-hide-subtree)
+            (outline-hide-subtree))
+          (org-end-of-subtree t t))))))
 
 (defun zoho-desk-tab-overview ()
   "Show the whole ticket document."
@@ -1352,6 +1727,11 @@ reply — code blocks stay darker than the field.")
   "Narrow to the Comments section."
   (interactive)
   (zoho-desk--set-tab "Comments"))
+
+(defun zoho-desk-tab-time-logs ()
+  "Narrow to the Time Logs section."
+  (interactive)
+  (zoho-desk--set-tab "Time Logs"))
 
 (defun zoho-desk-tab-next (&optional backward)
   "Cycle to the next tab, or previous when BACKWARD."
@@ -1386,7 +1766,49 @@ show their summary with a not-fetched marker."
              (concat (string-trim (or (alist-get 'summary thread) ""))
                      "\n\n[not fetched — C-c z e here to load]")))))
 
-(defun zoho-desk--render-ticket-org (ticket threads comments)
+(defun zoho-desk--insert-time-entry (entry)
+  "Insert time ENTRY as an org subheading with its details.
+The heading carries the essentials (when, who, how long, a
+description snippet) because entries are collapsed by default;
+the body holds the full description and billing details."
+  (let* ((hours (string-to-number
+                 (format "%s" (or (alist-get 'hoursSpent entry) 0))))
+         (minutes (string-to-number
+                   (format "%s" (or (alist-get 'minutesSpent entry) 0))))
+         (description (alist-get 'description entry))
+         (html (and (stringp description)
+                    (string-match-p "<[a-zA-Z!/]" description)))
+         (text (string-trim
+                (if html
+                    (zoho-desk--html-to-text description)
+                  (or description ""))))
+         (summary (car (split-string text "\n" t "[ \t]+")))
+         (owner (and (alist-get 'owner entry)
+                     (zoho-desk--person-name (alist-get 'owner entry)))))
+    (insert (format "** %s (%dh %02dm)%s%s\n"
+                    (zoho-desk--org-timestamp
+                     (or (alist-get 'executedTime entry)
+                         (alist-get 'createdTime entry)))
+                    hours minutes
+                    (if owner (concat " " owner) "")
+                    (if summary
+                        (concat " — " (truncate-string-to-width
+                                       summary 48 nil nil "…"))
+                      ""))
+            ":PROPERTIES:\n"
+            (format ":TIME_ENTRY_ID: %s\n" (alist-get 'id entry))
+            ":END:\n")
+    (dolist (detail `(("Charge Type" . ,(alist-get 'requestChargeType entry))
+                      ("Additional Cost" . ,(alist-get 'additionalCost entry))
+                      ("Total Cost" . ,(alist-get 'totalCost entry))))
+      (when (cdr detail)
+        (insert (format "  - %s :: %s\n" (car detail) (cdr detail)))))
+    (unless (string-empty-p text)
+      (insert (if html
+                  (zoho-desk--html-to-org-body description)
+                (zoho-desk--org-body description))))))
+
+(defun zoho-desk--render-ticket-org (ticket threads comments time-entries)
   "Fill the current buffer with an org document for TICKET."
   (let ((ticket-id (alist-get 'id ticket))
         (inhibit-read-only t))
@@ -1423,7 +1845,7 @@ show their summary with a not-fetched marker."
                         'zoho-desk-to-label t
                         'read-only t
                         'front-sticky '(read-only)
-                        'rear-nonsticky '(read-only))
+                        'rear-nonsticky t)
             (or (zoho-desk--default-reply-to ticket threads) "")
             "\n"
             ;; Separator line; its newline anchors the body field's
@@ -1451,6 +1873,50 @@ show their summary with a not-fetched marker."
           (insert (if (equal (alist-get 'contentType comment) "html")
                       (zoho-desk--html-to-org-body content)
                     (zoho-desk--org-body content))))))
+    (insert "* Time Logs\n"
+            "** New Time Log\n"
+            ;; Same input-field pattern as the Reply section:
+            ;; read-only label islands with editable gaps after them,
+            ;; then a description body between two marked separator
+            ;; newlines.  The labels are fully rear-nonsticky so
+            ;; typed text never inherits their marker properties, and
+            ;; the mid-line duration labels are not front-sticky so
+            ;; typing at the end of the value before them stays
+            ;; legal.  The Description label doubles as the start
+            ;; separator's line; `zoho-desk--protect-buffer' locks it
+            ;; along with everything else outside the fields.
+            (propertize "Executed: "
+                        'zoho-desk-executed-label t
+                        'read-only t
+                        'front-sticky '(read-only)
+                        'rear-nonsticky t)
+            (format-time-string "[%Y-%m-%d %a %H:%M]")
+            "\n"
+            ;; Each duration value starts as editable spaces so the
+            ;; input face paints a visible box even while it's blank;
+            ;; the spaces are trimmed away on submit.
+            (propertize "Hours: "
+                        'zoho-desk-duration 'hours
+                        'read-only t
+                        'front-sticky '(read-only)
+                        'rear-nonsticky t)
+            "    "
+            (propertize "  Minutes: "
+                        'zoho-desk-duration 'minutes
+                        'read-only t
+                        'rear-nonsticky t)
+            "    "
+            (propertize "  Seconds: "
+                        'zoho-desk-duration 'seconds
+                        'read-only t
+                        'rear-nonsticky t)
+            "    "
+            "\n"
+            "Description:"
+            (propertize "\n" 'zoho-desk-time-body-start t)
+            "\n"
+            (propertize "\n" 'zoho-desk-time-body-end t))
+    (mapc #'zoho-desk--insert-time-entry time-entries)
     (goto-char (point-min))))
 
 (defun zoho-desk--normalize-buffer-style ()
@@ -1465,49 +1931,113 @@ trailing-whitespace highlighting is turned off."
    'header-line `(:height ,(face-attribute 'default :height nil 'default)))
   (setq-local show-trailing-whitespace nil))
 
-(defun zoho-desk--reply-body-field ()
-  "Return (START . END) of the editable reply body area, or nil.
-The area sits between the separator newlines marked
-`zoho-desk-body-start' and `zoho-desk-body-end' at render time."
+(defun zoho-desk--marker-field (start-prop end-prop)
+  "Return (START . END) of the editable area between two marked newlines.
+START-PROP and END-PROP name the text properties placed on the
+separator newlines at render time; nil when either is missing."
   (save-excursion
     (save-restriction
       (widen)
       (when-let* ((sep (text-property-any (point-min) (point-max)
-                                          'zoho-desk-body-start t))
-                  (end (text-property-any sep (point-max)
-                                          'zoho-desk-body-end t)))
+                                          start-prop t))
+                  (end (text-property-any sep (point-max) end-prop t)))
         (cons (1+ sep) end)))))
 
+(defun zoho-desk--reply-body-field ()
+  "Return (START . END) of the editable reply body area, or nil."
+  (zoho-desk--marker-field 'zoho-desk-body-start 'zoho-desk-body-end))
+
+(defun zoho-desk--time-body-field ()
+  "Return (START . END) of the New Time Log description area, or nil."
+  (zoho-desk--marker-field 'zoho-desk-time-body-start
+                           'zoho-desk-time-body-end))
+
+(defun zoho-desk--editable-fields ()
+  "Return the buffer's editable input field ranges, sorted by position."
+  (sort (delq nil (list (zoho-desk--reply-to-field)
+                        (zoho-desk--reply-body-field)
+                        (zoho-desk--time-executed-field)
+                        (zoho-desk--duration-field 'hours)
+                        (zoho-desk--duration-field 'minutes)
+                        (zoho-desk--duration-field 'seconds)
+                        (zoho-desk--time-body-field)))
+        (lambda (a b) (< (car a) (car b)))))
+
 (defun zoho-desk--protect-buffer ()
-  "Make everything except the Reply input fields read-only.
-Only the To line's address and the reply body between its
-separator lines stay editable; the separators themselves are
-locked so the layout survives any edit."
+  "Make everything except the input fields read-only.
+Only the Reply section's To address and body and the New Time
+Log's Executed time, duration values and description stay
+editable; the separators around them are locked so the layout
+survives any edit."
   (let ((inhibit-read-only t))
     (save-excursion
       (save-restriction
         (widen)
-        (let ((to-field (zoho-desk--reply-to-field))
-              (body (zoho-desk--reply-body-field)))
-          (if (not (and to-field body))
+        (let ((fields (zoho-desk--editable-fields))
+              (pos (point-min)))
+          (if (null fields)
               (add-text-properties (point-min) (point-max)
                                    '(read-only t front-sticky (read-only)))
-            (add-text-properties (point-min) (car to-field)
-                                 '(read-only t
-                                   front-sticky (read-only)
-                                   rear-nonsticky (read-only)))
-            ;; To-line newline: rear-sticky (the default) so nothing
-            ;; can be typed between it and the separator below.
-            (add-text-properties (cdr to-field) (1- (car body))
-                                 '(read-only t))
-            ;; Separator before the body: rear-nonsticky so typing at
-            ;; the body's start stays legal.
-            (add-text-properties (1- (car body)) (car body)
-                                 '(read-only t rear-nonsticky (read-only)))
-            ;; No front-sticky from the end separator on: text typed
-            ;; at the end of the body must stay editable.
-            (add-text-properties (cdr body) (point-max)
-                                 '(read-only t))))))))
+            (dolist (field fields)
+              (when (< pos (car field))
+                (add-text-properties pos (car field) '(read-only t))
+                ;; Nothing can be typed before the document start.
+                (when (= pos (point-min))
+                  (add-text-properties pos (car field)
+                                       '(front-sticky (read-only))))
+                ;; Last locked char before the field: rear-nonsticky
+                ;; so typing at the field's start stays legal, and
+                ;; fully so — a label's marker property must not leak
+                ;; into text typed at the field's start either.
+                (add-text-properties (1- (car field)) (car field)
+                                     '(rear-nonsticky t)))
+              (setq pos (max pos (cdr field))))
+            ;; No front-sticky after the last field: text typed at a
+            ;; field's end must stay editable.
+            (when (< pos (point-max))
+              (add-text-properties pos (point-max) '(read-only t)))))))))
+
+(defun zoho-desk--field-jump (direction)
+  "Move point to the end of the next input field in DIRECTION.
+Cycles through the fields visible under the current narrowing;
+when point is not inside a field, jumps to the nearest one in
+DIRECTION instead, wrapping around."
+  (let* ((fields (seq-filter (lambda (field)
+                               (and (>= (car field) (point-min))
+                                    (<= (cdr field) (point-max))))
+                             (zoho-desk--editable-fields)))
+         (count (length fields))
+         (pos (seq-position fields (point)
+                            (lambda (field p)
+                              (and (>= p (car field))
+                                   (<= p (cdr field)))))))
+    (when (zerop count)
+      (user-error "No input fields in this view"))
+    (let* ((index (cond (pos (mod (+ pos direction) count))
+                        ((> direction 0)
+                         (or (seq-position fields (point)
+                                           (lambda (field p)
+                                             (> (car field) p)))
+                             0))
+                        (t (mod (1- (seq-count (lambda (field)
+                                                 (< (cdr field) (point)))
+                                               fields))
+                                count))))
+           (next (nth index fields)))
+      ;; Land after the field's content, not after the blank
+      ;; padding that keeps an empty field's box visible.
+      (goto-char (cdr next))
+      (skip-chars-backward " " (car next)))))
+
+(defun zoho-desk-next-field ()
+  "Jump to the next input field."
+  (interactive)
+  (zoho-desk--field-jump 1))
+
+(defun zoho-desk-previous-field ()
+  "Jump to the previous input field."
+  (interactive)
+  (zoho-desk--field-jump -1))
 
 (defvar zoho-desk--show-ticket-generation 0
   "Bumped per ticket fetch so a stale response cannot win.")
@@ -1569,8 +2099,11 @@ BACKGROUND refreshes the buffer without popping or selecting it
      `(("GET" ,(format "/tickets/%s" id)
         :params (("include" "contacts,assignee")))
        ("GET" ,(format "/tickets/%s/threads" id) :params (("limit" 20)))
-       ;; Comments are best-effort, as before (ignore-errors then).
+       ;; Comments and time entries are best-effort, as before
+       ;; (ignore-errors then).
        ("GET" ,(format "/tickets/%s/comments" id)
+        :params (("limit" 50)) :soft-errors t)
+       ("GET" ,(format "/tickets/%s/timeEntry" id)
         :params (("limit" 50)) :soft-errors t))
      (lambda (results err)
        (when (= generation zoho-desk--show-ticket-generation)
@@ -1580,14 +2113,17 @@ BACKGROUND refreshes the buffer without popping or selecting it
             id generation buf tab
             (nth 0 results)
             (alist-get 'data (nth 1 results))
-            (alist-get 'data (nth 2 results)))))))))
+            (alist-get 'data (nth 2 results))
+            (alist-get 'data (nth 3 results)))))))))
 
 (defun zoho-desk--prefetch-thread-bodies (id generation buf tab
-                                             ticket threads comments)
+                                             ticket threads comments
+                                             time-entries)
   "Fetch full bodies of TICKET's newest THREADS, then render into BUF.
 Only the newest `zoho-desk-thread-prefetch' THREADS are fetched;
 each fetched body is merged into its thread alist as `content'.
-GENERATION guards against a newer fetch; TAB is the tab to select."
+GENERATION guards against a newer fetch; TAB is the tab to select;
+COMMENTS and TIME-ENTRIES are passed through to the render."
   (let ((prefetch (seq-take threads zoho-desk-thread-prefetch)))
     (zoho-desk--request-all-async
      (mapcar (lambda (thread)
@@ -1610,16 +2146,16 @@ GENERATION guards against a newer fetch; TAB is the tab to select."
                        thread))
                    prefetch)
                   (nthcdr (length prefetch) threads))
-          comments tab))))))
+          comments time-entries tab))))))
 
-(defun zoho-desk--render-ticket (buf ticket threads comments tab)
+(defun zoho-desk--render-ticket (buf ticket threads comments time-entries tab)
   "Fill BUF with TICKET's org document and select TAB."
   (with-current-buffer buf
     (rename-buffer (format "*zoho #%s*" (alist-get 'ticketNumber ticket)) t)
     (let ((inhibit-read-only t))
       (widen)
       (erase-buffer))
-    (zoho-desk--render-ticket-org ticket threads comments)
+    (zoho-desk--render-ticket-org ticket threads comments time-entries)
     (setq zoho-desk--ticket ticket
           zoho-desk--threads threads
           buffer-offer-save nil)
@@ -1627,7 +2163,8 @@ GENERATION guards against a newer fetch; TAB is the tab to select."
     (zoho-desk--sync-accent-faces)
     (zoho-desk--normalize-buffer-style)
     (zoho-desk--protect-buffer)
-    (zoho-desk--set-tab tab)))
+    (zoho-desk--set-tab tab)
+    (zoho-desk--fill-pending-time-log)))
 
 (defun zoho-desk-open-ticket-at-point ()
   "Open the ticket on the current list line."
@@ -1786,17 +2323,86 @@ tickets there need no derivation source of their own."
           from)
     from))
 
-(defun zoho-desk--reply-to-field ()
-  "Return (START . END) of the To line's editable address area, or nil."
+(defun zoho-desk--label-line-field (label-prop)
+  "Return (START . END) of the editable rest of a labeled input line.
+LABEL-PROP is the text property carried by the line's read-only
+label; the field runs from the label's end to the end of line."
   (save-excursion
     (save-restriction
       (widen)
       (when-let* ((label (next-single-property-change
-                          (point-min) 'zoho-desk-to-label))
-                  (start (next-single-property-change
-                          label 'zoho-desk-to-label)))
+                          (point-min) label-prop))
+                  (start (next-single-property-change label label-prop)))
         (goto-char start)
         (cons start (line-end-position))))))
+
+(defun zoho-desk--reply-to-field ()
+  "Return (START . END) of the To line's editable address area, or nil."
+  (zoho-desk--label-line-field 'zoho-desk-to-label))
+
+(defun zoho-desk--time-executed-field ()
+  "Return (START . END) of the Executed line's editable area, or nil."
+  (zoho-desk--label-line-field 'zoho-desk-executed-label))
+
+(defun zoho-desk--duration-field (unit)
+  "Return (START . END) of the duration UNIT's editable value, or nil.
+UNIT is one of the symbols `hours', `minutes' or `seconds'; its
+value runs from the end of its label to the start of the next
+duration label, or to the end of the line for the last one.  An
+empty value is a zero-width range."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (when-let* ((label (text-property-any (point-min) (point-max)
+                                            'zoho-desk-duration unit))
+                  (start (text-property-not-all label (point-max)
+                                                'zoho-desk-duration unit)))
+        (goto-char start)
+        (cons start
+              ;; A duration property right at START means the next
+              ;; label is adjacent: the value is empty.
+              (if (get-text-property start 'zoho-desk-duration)
+                  start
+                (min (or (next-single-property-change
+                          start 'zoho-desk-duration)
+                         (point-max))
+                     (line-end-position))))))))
+
+(defun zoho-desk--duration-input (unit)
+  "Return the duration UNIT field's value as a whole number, 0 when blank."
+  (let* ((field (or (zoho-desk--duration-field unit)
+                    (user-error "No New Time Log section in this buffer")))
+         (text (string-trim (buffer-substring-no-properties
+                             (car field) (cdr field)))))
+    (cond ((string-empty-p text) 0)
+          ((string-match-p "\\`[0-9]+\\'" text) (string-to-number text))
+          (t (user-error "%s must be a whole number, not %S"
+                         (capitalize (symbol-name unit)) text)))))
+
+(defun zoho-desk--time-executed-value ()
+  "Return the Executed field's time as an Emacs time value.
+nil when the field is blank (meaning: now); a `user-error' when
+its content is not a readable org timestamp."
+  (when-let* ((field (zoho-desk--time-executed-field)))
+    (let ((text (string-trim (buffer-substring-no-properties
+                              (car field) (cdr field)))))
+      (unless (string-empty-p text)
+        (condition-case nil
+            (org-time-string-to-time text)
+          (error (user-error "Unreadable Executed time: %s" text)))))))
+
+(defun zoho-desk--set-field (field text)
+  "Replace the editable FIELD's content with TEXT.
+FIELD is a (START . END) range as returned by the field lookup
+functions; nil is a no-op."
+  (when field
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (car field))
+          (delete-region (car field) (cdr field))
+          (insert text))))))
 
 (defun zoho-desk--reply-to-address ()
   "Return the address written on the To line, or nil when blank."
@@ -1807,13 +2413,7 @@ tickets there need no derivation source of their own."
 
 (defun zoho-desk--set-reply-to-address (address)
   "Write ADDRESS into the To line, replacing its current content."
-  (when-let* ((field (zoho-desk--reply-to-field)))
-    (save-excursion
-      (save-restriction
-        (widen)
-        (goto-char (car field))
-        (delete-region (car field) (cdr field))
-        (insert address)))))
+  (zoho-desk--set-field (zoho-desk--reply-to-field) address))
 
 (defun zoho-desk--reply-body ()
   "Return the text written in the reply body field, sans comment lines.
@@ -2201,23 +2801,101 @@ once the post succeeds, and is brought back should it fail."
 
 ;;;; Time entries
 
-(defun zoho-desk--post-time-entry (ticket-id minutes description)
-  "POST a time entry of MINUTES with DESCRIPTION to TICKET-ID."
-  (message "Logging %dh %02dm on ticket %s…"
-           (/ minutes 60) (% minutes 60) ticket-id)
-  (zoho-desk--request-async
-   "POST" (format "/tickets/%s/timeEntry" ticket-id)
-   (lambda (_result err)
-     (if err
-         (zoho-desk--announce-write-failure
-          (format "time entry on ticket %s" ticket-id) err)
-       (message "Logged %dh %02dm on ticket %s"
-                (/ minutes 60) (% minutes 60) ticket-id)))
-   :payload `(("hoursSpent" . ,(number-to-string (/ minutes 60)))
-              ("minutesSpent" . ,(number-to-string (% minutes 60)))
-              ("executedTime" . ,(format-time-string
-                                  "%Y-%m-%dT%H:%M:%S.000Z" nil t))
-              ("description" . ,description))))
+(defun zoho-desk--format-duration (hours minutes seconds)
+  "Format a duration for messages; SECONDS only when they matter."
+  (concat (format "%dh %02dm" hours minutes)
+          (if (zerop seconds) "" (format " %02ds" seconds))))
+
+(defun zoho-desk--post-time-entry (ticket-id duration description
+                                             &optional buf callback executed)
+  "POST a time entry of DURATION with DESCRIPTION to TICKET-ID.
+DURATION is a number of minutes or an (HOURS MINUTES SECONDS)
+list, normalized either way; EXECUTED is the entry's executed
+time as an Emacs time value, defaulting to now.  On failure BUF,
+when given, is refocused (it still holds the unsent content); on
+success CALLBACK, when given, is called with no arguments."
+  (let* ((total (if (numberp duration)
+                    (* 60 (round duration))
+                  (+ (* 3600 (nth 0 duration))
+                     (* 60 (nth 1 duration))
+                     (nth 2 duration))))
+         (hours (/ total 3600))
+         (minutes (/ (% total 3600) 60))
+         (seconds (% total 60))
+         (pretty (zoho-desk--format-duration hours minutes seconds)))
+    (message "Logging %s on ticket %s…" pretty ticket-id)
+    (zoho-desk--request-async
+     "POST" (format "/tickets/%s/timeEntry" ticket-id)
+     (lambda (_result err)
+       (if err
+           (zoho-desk--announce-write-failure
+            (format "time entry on ticket %s" ticket-id) err buf)
+         (message "Logged %s on ticket %s" pretty ticket-id)
+         (when callback (funcall callback))))
+     :payload `(("hoursSpent" . ,(number-to-string hours))
+                ("minutesSpent" . ,(number-to-string minutes))
+                ("secondsSpent" . ,(number-to-string seconds))
+                ("executedTime" . ,(format-time-string
+                                    "%Y-%m-%dT%H:%M:%S.000Z" executed t))
+                ("description" . ,description)))))
+
+(defun zoho-desk-pick-executed-time ()
+  "Fill the New Time Log's Executed field with the org date picker."
+  (interactive)
+  (let ((field (or (zoho-desk--time-executed-field)
+                   (user-error "No New Time Log section in this buffer")))
+        (time (org-read-date t t nil "Executed time: ")))
+    (zoho-desk--set-field field
+                          (format-time-string "[%Y-%m-%d %a %H:%M]" time))))
+
+(defun zoho-desk-org-timestamp-dwim ()
+  "Pick the Executed time when point is in its field, else org's C-c .."
+  (interactive)
+  (let ((field (zoho-desk--time-executed-field)))
+    (if (and field (<= (car field) (point)) (>= (cdr field) (point)))
+        (zoho-desk-pick-executed-time)
+      (call-interactively (if (fboundp 'org-timestamp)
+                              'org-timestamp
+                            'org-time-stamp)))))
+
+(defun zoho-desk-submit-time-log ()
+  "Post the New Time Log section of this ticket buffer.
+Reads the Executed time, the Hours / Minutes / Seconds duration
+and the description typed below them (the Time Logs tab's
+counterpart of the Reply section) and sends in the background; on
+success the ticket is re-fetched so the new entry appears in the
+Time Logs list and the fields are reset for the next one."
+  (interactive)
+  (unless zoho-desk--ticket (user-error "Not in a ticket buffer"))
+  (let* ((body (or (zoho-desk--time-body-field)
+                   (user-error "No New Time Log section in this buffer")))
+         (duration (list (zoho-desk--duration-input 'hours)
+                         (zoho-desk--duration-input 'minutes)
+                         (zoho-desk--duration-input 'seconds)))
+         (executed (zoho-desk--time-executed-value))
+         (description (string-trim (buffer-substring-no-properties
+                                    (car body) (cdr body))))
+         (buf (current-buffer))
+         (ticket-id (alist-get 'id zoho-desk--ticket))
+         (ticket-number (alist-get 'ticketNumber zoho-desk--ticket)))
+    (when (zerop (+ (* 3600 (nth 0 duration))
+                    (* 60 (nth 1 duration))
+                    (nth 2 duration)))
+      (user-error "The duration is empty"))
+    (zoho-desk--post-time-entry
+     ticket-id duration description buf
+     (lambda ()
+       ;; Only if the buffer still shows this ticket, and without
+       ;; stealing focus — same rules as after a sent reply.
+       (when (and (buffer-live-p buf)
+                  (equal (alist-get 'id (buffer-local-value
+                                         'zoho-desk--ticket buf))
+                         ticket-id))
+         (zoho-desk--show-ticket
+          ticket-id ticket-number
+          (buffer-local-value 'zoho-desk--current-tab buf)
+          t)))
+     executed)))
 
 ;;;###autoload
 (defun zoho-desk-add-time-entry (ticket-id minutes description)
@@ -2250,6 +2928,131 @@ minutes and its heading as description."
          (description (read-string "Description: "
                                    (org-get-heading t t t t))))
     (zoho-desk--post-time-entry ticket-id (round minutes) description)))
+
+;;;; Ticket timer (posframe-timer integration)
+
+(defvar zoho-desk--timer-ticket nil
+  "Ticket alist the posframe-timer clock is running against, or nil.")
+
+(defvar zoho-desk--pending-time-log nil
+  "Finished timer waiting to land in a ticket's New Time Log fields.
+A list (TICKET-ID HOURS MINUTES SECONDS START), consumed by
+`zoho-desk--fill-pending-time-log' once a buffer showing TICKET-ID
+is rendered.")
+
+;;;###autoload
+(defun zoho-desk-start-ticket-timer ()
+  "Clock the posframe timer in against the ticket at point.
+The ticket number and subject are shown above the running clock in
+the posframe.  From anywhere in Emacs, finish with
+`zoho-desk-finish-ticket-timer' (or `posframe-timer-clock-out') to
+land the elapsed time in the ticket's New Time Log fields, ready to
+describe and submit; discard with `zoho-desk-cancel-ticket-timer'."
+  (interactive)
+  (unless (require 'posframe-timer nil t)
+    (user-error "The posframe-timer package is not available"))
+  (let ((ticket (or (zoho-desk--ticket-at-point)
+                    (user-error "No ticket in context"))))
+    ;; clock-in user-errors when a clock is already running, so the
+    ;; ticket is only remembered once the clock is really ours.
+    (posframe-timer-clock-in
+     (format "#%s %s"
+             (alist-get 'ticketNumber ticket)
+             (or (alist-get 'subject ticket) ""))
+     #'zoho-desk--ticket-timer-out
+     #'zoho-desk--ticket-timer-cancelled)
+    (setq zoho-desk--timer-ticket ticket)))
+
+;;;###autoload
+(defun zoho-desk-finish-ticket-timer ()
+  "Stop the ticket timer and open its New Time Log, duration filled in.
+Callable from anywhere: the ticket buffer pops up on its Time Logs
+tab with Executed set to when the timer started and the Hours /
+Minutes / Seconds fields set to the elapsed time — describe the work
+and submit with `zoho-desk-submit-time-log'."
+  (interactive)
+  (unless zoho-desk--timer-ticket
+    (user-error "No ticket timer running"))
+  (posframe-timer-clock-out))
+
+;;;###autoload
+(defun zoho-desk-cancel-ticket-timer ()
+  "Discard the ticket timer without logging anything."
+  (interactive)
+  (unless zoho-desk--timer-ticket
+    (user-error "No ticket timer running"))
+  (posframe-timer-clock-cancel))
+
+(defun zoho-desk--ticket-timer-cancelled (_start _label)
+  "Forget the ticket the discarded clock was running against."
+  (setq zoho-desk--timer-ticket nil))
+
+(defun zoho-desk--ticket-timer-out (start end _label)
+  "Land the clocked interval START..END in the ticket's New Time Log.
+The elapsed time is parked in `zoho-desk--pending-time-log', then
+the ticket buffer is brought up on its Time Logs tab: filled
+immediately when it already shows the ticket, otherwise once the
+fetch renders it."
+  (let* ((ticket zoho-desk--timer-ticket)
+         (id (format "%s" (alist-get 'id ticket)))
+         (secs (max 1 (round (float-time (time-subtract end start)))))
+         (buf zoho-desk--ticket-buffer))
+    (setq zoho-desk--timer-ticket nil
+          zoho-desk--pending-time-log
+          (list id (/ secs 3600) (/ (% secs 3600) 60) (% secs 60) start))
+    (if (and (buffer-live-p buf)
+             (equal id (format "%s" (alist-get 'id (buffer-local-value
+                                                    'zoho-desk--ticket buf)))))
+        (progn
+          (pop-to-buffer buf
+                         `((display-buffer-reuse-window
+                            display-buffer-below-selected)
+                           (window-height . ,zoho-desk-ticket-window-height)))
+          (zoho-desk--set-tab "Time Logs")
+          (zoho-desk--fill-pending-time-log))
+      (zoho-desk--show-ticket id (alist-get 'ticketNumber ticket)
+                              "Time Logs"))))
+
+(defun zoho-desk--fill-pending-time-log ()
+  "Write the pending timer duration into this buffer's New Time Log.
+No-op unless `zoho-desk--pending-time-log' targets the ticket shown
+here; the pending entry is consumed, and point lands in the
+description field ready for `zoho-desk-submit-time-log'."
+  (when-let* ((pending zoho-desk--pending-time-log)
+              ((equal (car pending)
+                      (format "%s" (alist-get 'id zoho-desk--ticket)))))
+    (pcase-let ((`(,_id ,hours ,minutes ,seconds ,start) pending))
+      ;; Each field is looked up fresh because every insertion shifts
+      ;; the positions of the fields after it.
+      (zoho-desk--set-field (zoho-desk--time-executed-field)
+                            (format-time-string "[%Y-%m-%d %a %H:%M]" start))
+      (zoho-desk--set-field (zoho-desk--duration-field 'hours)
+                            (number-to-string hours))
+      (zoho-desk--set-field (zoho-desk--duration-field 'minutes)
+                            (number-to-string minutes))
+      (zoho-desk--set-field (zoho-desk--duration-field 'seconds)
+                            (number-to-string seconds))
+      (setq zoho-desk--pending-time-log nil)
+      (when-let* ((body (zoho-desk--time-body-field)))
+        (goto-char (car body))
+        ;; The tab switch collapsed every time log entry, New Time Log
+        ;; included; open it back up so the filled fields are visible,
+        ;; and land in the description ready to type.  Window points
+        ;; are set explicitly because the render may happen while the
+        ;; user's selected window is elsewhere.
+        (save-excursion
+          (org-back-to-heading t)
+          (if (fboundp 'org-fold-show-subtree)
+              (org-fold-show-subtree)
+            (outline-show-subtree)))
+        (dolist (win (get-buffer-window-list nil nil t))
+          (set-window-point win (car body)))
+        (when (and (fboundp 'evil-insert-state)
+                   (bound-and-true-p evil-local-mode))
+          (evil-insert-state)))
+      (message "Timer stopped at %s — describe the work and %s to submit"
+               (zoho-desk--format-duration hours minutes seconds)
+               (substitute-command-keys "\\[zoho-desk-submit-time-log]")))))
 
 ;;;; Org snippet
 
@@ -2284,6 +3087,7 @@ minutes and its heading as description."
     (kbd "RET") #'zoho-desk-open-ticket-at-point
     (kbd "g r") #'zoho-desk-refresh-table
     (kbd "t") #'zoho-desk-add-time-entry
+    (kbd "T") #'zoho-desk-start-ticket-timer
     (kbd "w") #'zoho-desk-copy-org-snippet
     (kbd "o") #'zoho-desk-browse-ticket
     (kbd "]") #'zoho-desk-next-page
@@ -2292,7 +3096,13 @@ minutes and its heading as description."
   (dolist (state '(normal motion))
     (evil-define-minor-mode-key state 'zoho-desk-ticket-minor-mode
       (kbd "gt") #'zoho-desk-tab-next
-      (kbd "gT") #'zoho-desk-tab-previous)))
+      (kbd "gT") #'zoho-desk-tab-previous))
+  ;; evil-org's state maps outrank the plain minor-mode map, so field
+  ;; cycling must be registered with Evil too.
+  (dolist (state '(normal insert))
+    (evil-define-minor-mode-key state 'zoho-desk-ticket-minor-mode
+      (kbd "M-n") #'zoho-desk-next-field
+      (kbd "M-p") #'zoho-desk-previous-field)))
 
 (provide 'zoho-desk)
 ;;; zoho-desk.el ends here

@@ -10,7 +10,13 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
     table on the right. Starred views are listed first, every other
     view below; on first open only the starred =Open= view is checked
   - Tickets open as org-mode documents with Overview / Thread /
-    Comments tabs; each email and comment is an org subheading
+    Comments / Time Logs tabs; each email, comment and time log is
+    an org subheading
+  - Incoming HTML (thread bodies, descriptions, comments) is
+    converted to org markup via pandoc, so bold, tables, code
+    blocks, lists and links keep their formatting on ingest
+    (plain-text fallback when pandoc is not installed; see
+    =zoho-desk-pandoc-program=)
   - All API traffic runs in the background — Emacs never blocks on
     the network. Fetches show a =Fetching …= placeholder that fills
     in when the API answers; replies, comments and time entries send
@@ -18,13 +24,22 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
     buffer with the unsent content is refocused with a loud error,
     ready to retry
   - Post private/public comments
-  - Post time entries to tickets
+  - Post time entries to tickets — from a prompt anywhere, or from
+    the ticket's Time Logs tab (a =** New Time Log= entry with
+    Reply-style input fields sits at the top of the list)
   - Send org-clocked time to a ticket via the =ZOHO_TICKET_ID= property
+  - Track work live with the posframe timer: ~T~ on a ticket clocks
+    in a floating count-up labeled with the ticket number and
+    subject; finishing it from anywhere drops the elapsed time into
+    that ticket's New Time Log fields, ready to describe and submit
 
 * Install
 ** Layer
 Add =zoho-tickets= to =dotspacemacs-configuration-layers= in your
 =~/.spacemacs=.
+
+Optional: install =pandoc= (system package) so incoming HTML is
+rendered as org markup instead of plain text.
 
 ** Zoho OAuth setup (one time)
 Where to click, start to finish:
@@ -92,9 +107,14 @@ Sidebar counts show how many tickets have been fetched for a view
 | Key Binding | Description                                |
 |-------------+--------------------------------------------|
 | ~SPC o z z~ | Open the dashboard                         |
+| ~SPC o z u~ | Open a ticket from its URL (auto-switches department) |
+| ~SPC o z f~ | Quickfind: full ticket number jumps, else helm fuzzy find |
 | ~SPC o z a~ | One-time OAuth grant-code exchange         |
 | ~SPC o z t~ | Add a time entry to a ticket               |
 | ~SPC o z l~ | Log org-clocked time of the entry at point |
+| ~SPC o z i~ | Start the ticket timer (needs a ticket at point) |
+| ~SPC o z o~ | Finish the ticket timer → fill its New Time Log |
+| ~SPC o z k~ | Cancel the ticket timer                    |
 
 Views sidebar (left pane):
 
@@ -112,23 +132,28 @@ Ticket table (right pane):
 | ~g~ / ~gr~ | Refresh                         |
 | ~]~ / ~[~ | Next / previous page             |
 | ~t~   | Add time entry to ticket at point    |
+| ~T~   | Start the ticket timer on ticket at point |
 | ~w~   | Copy org heading with ZOHO_TICKET_ID |
 | ~o~   | Open ticket in browser               |
 | ~q~   | Close dashboard, restore windows     |
 
 Ticket document (org buffer, =zoho-desk-ticket-minor-mode=). The
-buffer is read-only except the Reply section body; the header-line
-tabs are clickable. Commands are on the major-mode leader (~,~ or
-~SPC m~) as well as =C-c z=:
+buffer is read-only except the Reply and New Time Log input fields;
+the header-line tabs are clickable. Commands are on the major-mode
+leader (~,~ or ~SPC m~) as well as =C-c z=:
 
 | Leader key | Also         | Description                              |
 |------------+--------------+------------------------------------------|
-| ~, 1-3~    | ~C-c z 1-3~, click | Overview / Thread / Comments tab   |
+| ~, 1-4~    | ~C-c z 1-4~, click | Overview / Thread / Comments / Time Logs tab |
 |            | ~gt~ / ~gT~  | Next / previous tab (evil)               |
 | ~, e~      | ~C-c z e~    | Fetch full email body at point           |
 | ~, s~      | ~C-c z s~    | Send the Reply section as email          |
+| ~, l~      | ~C-c z l~    | Post the New Time Log section            |
+| ~, .~      | ~C-c .~      | Org date picker for the Executed field   |
+|            | ~M-n~ / ~M-p~ | Next / previous input field              |
 | ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
 | ~, t~      | ~C-c z t~    | Add time entry                           |
+| ~, T~      | ~C-c z T~    | Start the ticket timer on this ticket    |
 | ~, w~      | ~C-c z w~    | Copy org heading with ZOHO_TICKET_ID     |
 | ~, y~      | ~C-c z y~    | Copy agent-console ticket URL            |
 | ~, #~      | ~C-c z #~    | Copy ticket number (=#ART-364= form)     |
@@ -182,6 +207,39 @@ and also uploaded as a regular attachment, so clients that block
 inline data images still receive the file. Set
 =zoho-desk-reply-html= to nil for plain-text replies.
 
+Time logs: the Time Logs tab lists the ticket's time entries as
+org subheadings, newest as returned by the API, each carrying its
+timestamp, duration, owner and a description snippet in the
+heading. Entries are *collapsed by default* — every tab switch
+re-folds them — so the tab reads as a compact index; ~TAB~ on a
+heading opens the details (full description, charge type, costs).
+The top entry is =** New Time Log=: unfold it and you get the same
+input-field pattern as the Reply section — an =Executed:= line
+prefilled with the current time (~C-c .~ or ~, .~ opens the org
+date picker on it, or edit the timestamp by hand; blank means
+now), a duration line with =Hours:= / =Minutes:= / =Seconds:=
+values (blank counts as 0), and a description field below them,
+all on the =zoho-desk-input= background. ~M-n~ / ~M-p~ cycle
+between the input fields (works in normal and insert state; ~TAB~
+keeps its org folding role). ~, l~ (or ~C-c z l~) posts it in the
+background and refreshes the ticket so the new entry appears in
+the list.
+
+Ticket timer: ~T~ on a ticket (table line or open ticket, also
+~, T~ / ~C-c z T~ / ~SPC o z i~) clocks the =posframe-timer=
+free clock in against it — the floating clock counts up with the
+ticket number and subject above it, so what you're billing is
+always on screen. The timer follows the ticket, not the buffer:
+open other tickets, close the buffer, work anywhere. When done,
+~SPC o z o~ (or =posframe-timer='s own clock-out, ~SPC a T o~)
+stops the clock from wherever you are, brings the ticket up on
+its Time Logs tab and fills the New Time Log for you — Executed
+set to when the timer started, Hours / Minutes / Seconds set to
+the elapsed time, point in the description field. Describe the
+work and ~, l~ submits as usual. ~SPC o z k~ (or ~SPC a T k~)
+discards the timer without logging anything. Requires the
+=posframe-timer= layer.
+
 The From address is resolved per department: global
 =zoho-desk-reply-from= → =zoho-desk-department-reply-from= entry →
 address learned this session → this ticket's outbound/inbound
@@ -217,9 +275,10 @@ Endpoints used (base =https://desk.zoho.com/api/v1=, headers
 - =GET /tickets?viewId=&include=contacts,assignee&limit=&from= — fetched
   once per checked view, then merged (union, deduped by ticket id,
   newest modification first)
-- =GET /tickets/{id}= , =/threads=, =/threads/{tid}=, =/comments=
+- =GET /tickets/{id}= , =/threads=, =/threads/{tid}=, =/comments=,
+  =/timeEntry=
 - =POST /tickets/{id}/comments= — ={"content": ..., "isPublic": ...}=
 - =POST /tickets/{id}/timeEntry= — ={"hoursSpent", "minutesSpent",
-  "executedTime", "description"}=
+  "secondsSpent", "executedTime", "description"}=
 
 Full reference: https://desk.zoho.com/DeskAPIDocument

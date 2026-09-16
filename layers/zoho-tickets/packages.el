@@ -73,16 +73,26 @@ Each entry is either:
   (use-package zoho-desk
     :commands (zoho-desk-dashboard
                zoho-desk-tickets
+               zoho-desk-open-ticket-url
+               zoho-desk-quickfind
                zoho-desk-authorize
                zoho-desk-add-time-entry
-               zoho-desk-log-time-from-org)
+               zoho-desk-log-time-from-org
+               zoho-desk-start-ticket-timer
+               zoho-desk-finish-ticket-timer
+               zoho-desk-cancel-ticket-timer)
     :init
     (spacemacs/declare-prefix "oz" "zoho")
     (spacemacs/set-leader-keys
       "ozz" 'zoho-desk-dashboard
+      "ozu" 'zoho-desk-open-ticket-url
+      "ozf" 'zoho-desk-quickfind
       "oza" 'zoho-desk-authorize
       "ozt" 'zoho-desk-add-time-entry
-      "ozl" 'zoho-desk-log-time-from-org)
+      "ozl" 'zoho-desk-log-time-from-org
+      "ozi" 'zoho-desk-start-ticket-timer
+      "ozo" 'zoho-desk-finish-ticket-timer
+      "ozk" 'zoho-desk-cancel-ticket-timer)
     :config
     ;; Major-mode leader (, / SPC m) in the dashboard panes.
     (spacemacs/set-leader-keys-for-major-mode 'zoho-desk-views-mode
@@ -96,6 +106,7 @@ Each entry is either:
       "n" 'zoho-desk-next-page
       "p" 'zoho-desk-previous-page
       "t" 'zoho-desk-add-time-entry
+      "T" 'zoho-desk-start-ticket-timer
       "w" 'zoho-desk-copy-org-snippet
       "y" 'zoho-desk-copy-ticket-url
       "#" 'zoho-desk-copy-ticket-number
@@ -108,12 +119,16 @@ Each entry is either:
       "1" 'zoho-desk-tab-overview
       "2" 'zoho-desk-tab-thread
       "3" 'zoho-desk-tab-comments
+      "4" 'zoho-desk-tab-time-logs
       "e" 'zoho-desk-expand-thread-at-point
       "s" 'zoho-desk-send-reply
+      "l" 'zoho-desk-submit-time-log
+      "." 'zoho-desk-pick-executed-time
       "a" 'zoho-desk-add-email
       "ie" 'zoho-desk-insert-image
       "c" 'zoho-desk-add-comment
       "t" 'zoho-desk-add-time-entry
+      "T" 'zoho-desk-start-ticket-timer
       "r" 'zoho-desk-refresh-ticket
       "b" 'zoho-desk-browse-ticket
       "w" 'zoho-desk-copy-org-snippet
