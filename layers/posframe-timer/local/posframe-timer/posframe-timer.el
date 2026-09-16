@@ -56,6 +56,7 @@
 (declare-function posframe-show "posframe")
 (declare-function posframe-hide "posframe")
 (declare-function posframe-delete "posframe")
+(declare-function posframe-delete-frame "posframe")
 (declare-function posframe-workable-p "posframe")
 (declare-function alert "alert")
 (declare-function org-clocking-p "org-clock")
@@ -393,10 +394,18 @@ helm-posframe session) must not be allowed to create a parent cycle."
         (setq posframe-timer--position (frame-position frame))))))
 
 (defun posframe-timer-reset-position ()
-  "Forget the dragged position and snap back to the top-right corner."
+  "Forget the dragged position and snap back to the top-right corner.
+The frame is deleted and recreated rather than re-shown: a window
+manager can move the frame behind posframe's back, and posframe
+skips repositioning while its cached coordinates still look right."
   (interactive)
   (setq posframe-timer--position nil
         posframe-timer--last-layout nil)
+  (when (and (featurep 'posframe)
+             (get-buffer posframe-timer--buffer)
+             (frame-live-p posframe-timer--frame))
+    (posframe-delete-frame posframe-timer--buffer)
+    (setq posframe-timer--frame nil))
   (posframe-timer--refresh))
 
 ;;; Mode-line fallback
