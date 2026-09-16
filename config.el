@@ -159,6 +159,10 @@
   (set-face-attribute 'org-level-4 nil :height 1.05)
   (set-face-attribute 'org-block nil :family "Monospace")
   (pretty-print-header)
+  ;; This blank header is padding: use the buffer background, not the
+  ;; theme's header-line background (which can match Solaire).
+  (setq-local face-remapping-alist
+              '((header-line (:height 4.0) variable-pitch default)))
   (org-fancy-priorities-mode)
   (org-indent-mode t)
   (setq global-hl-line-mode nil)
