@@ -1,0 +1,64 @@
+#+TITLE: posframe-timer layer
+
+A Spacemacs layer providing a big (~2.2x font height) timer/clock display in a posframe pinned to the top-right corner of the frame. Three things can be on screen at once, stacked:
+
+- the running *org clock* (automatic): the clocked heading, word-wrapped to the width of the clock, above an elapsed count-up (=00:00=, widening to =00:00:00= past an hour) — so whether a clock is running is always visible at a glance;
+- a *free clock* not attached to any org buffer, filed into a timesheet org file on clock-out;
+- the original *countdown timer* (default 30 minutes).
+
+The repository is itself the layer: it is symlinked into =~/.spacemacs.d/local/layers/posframe-timer= and enabled with
+
+#+begin_src emacs-lisp
+(posframe-timer :packages (posframe-timer))
+#+end_src
+
+in the host layers file.
+
+* Key bindings
+
+| Key binding | Description                                        |
+|-------------+----------------------------------------------------|
+| ~SPC a T t~ | start / resume countdown (numeric prefix = minutes) |
+| ~SPC a T s~ | set a duration ("25", "25:30", "1h30m") and start  |
+| ~SPC a T p~ | toggle countdown pause                             |
+| ~SPC a T S~ | stop (pause + hide; start resumes)                 |
+| ~SPC a T c~ | clear (cancel, hide, reset to default)             |
+| ~SPC a T i~ | clock in a free clock (optional label)             |
+| ~SPC a T o~ | clock out and file it in the timesheet             |
+| ~SPC a T k~ | discard the free clock                             |
+| ~SPC a T d~ | toggle posframe vs mode-line display               |
+| ~SPC a T r~ | snap the posframe back to the top-right corner     |
+
+* Org clock
+
+The layer hooks =org-clock-in-hook= / =org-clock-out-hook= / =org-clock-cancel-hook= (no advice needed), so the posframe appears the moment any org clock starts and disappears when it stops. A clock already running when the package loads (e.g. via =org-clock-persist=) is picked up too.
+
+Since the posframe now shows the clocked task, you may want to drop org's own mode-line copy:
+
+#+begin_src emacs-lisp
+(setq org-clock-clocked-in-display nil)
+#+end_src
+
+* Free clocks and the timesheet
+
+~SPC a T i~ starts a clock with no org context, prompting for an optional label shown above the count-up. ~SPC a T o~ stops it (at the moment the command is invoked, not when the prompt is answered) and asks for an org heading — with completion over existing headings and the label as default — then deposits a closed =CLOCK:= line under that heading in =posframe-timer-timesheet-file= (default =~/org/timesheet.org=). File and heading are created if missing; the clock line lands in the =LOGBOOK= drawer per =org-clock-into-drawer=, so org clocktables work on it.
+
+From Lisp, =posframe-timer-clock-in= takes optional =ON-OUT= and =ON-CANCEL= handlers that claim the clock's outcome: clock-out then hands the start time, end time and label to =ON-OUT= instead of prompting for a timesheet heading. The zoho-tickets layer uses this for its ticket timer — ~SPC a T o~ / ~SPC a T k~ still work on such a clock and route to the owner.
+
+* Mouse
+
+Hold =mouse-1= on the posframe to drag it; the dropped position sticks until reset or cleared. =mouse-3= toggles countdown pause.
+
+* Mode-line fallback
+
+When =posframe-timer-use-posframe= is nil, the frame is a terminal, or posframe is unavailable, the countdown and free clock take over the =display-time-mode= clock slot in the mode line and restore the clock when nothing is active. The org clock is not duplicated there because org-clock maintains its own mode-line display.
+
+* Configuration
+
+Set =posframe-timer-*= defcustoms in =dotspacemacs/user-config=:
+=posframe-timer-default-duration= (seconds), =posframe-timer-org-clock-integration=,
+=posframe-timer-timesheet-file=, =posframe-timer-margin=,
+=posframe-timer-urgent-threshold=, =posframe-timer-finished-hook=. The
+display scale is the =:height= of =posframe-timer-face=; the heading wrap
+width follows the =:height= ratio between =posframe-timer-clock-face= and
+=posframe-timer-heading-face=.
