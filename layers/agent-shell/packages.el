@@ -34,6 +34,7 @@
 (defun agent-shell/init-agent-shell ()
   (use-package agent-shell
     :commands (agent-shell
+               agent-shell-openai-start-codex
                agent-shell-toggle
                agent-shell-new-shell
                agent-shell-new-temp-shell

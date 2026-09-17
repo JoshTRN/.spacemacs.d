@@ -33,5 +33,4 @@ Add =agent-shell= to =dotspacemacs-configuration-layers= (via
 | ~SPC a a r~   | Send the active region                             |
 | ~SPC a a f~   | Send the current file                              |
 
-Agent-specific starters (e.g. Claude Code on ~SPC a a c~) are bound in
-the host-local config, not here.
+Agent-specific starters are bound in the host-local config.
