@@ -9,9 +9,14 @@ the same: a two-pane dashboard, org-mode documents, background API
 traffic, posframe-timer time tracking.
 
 ** Features:
-  - Dashboard: the portal's projects on the left (=PROF-167 Name=
-    rows, open-task counts), the selected project's task table on
-    the right (key, status, %, owner, due date, name)
+  - Dashboard: a project selector (helm) first, then the project's
+    task statuses on the left as OR-filter checkboxes with counts —
+    closed statuses included, sunk to the end — and the checked
+    statuses' task table on the right (key, status, %, owner, due
+    date, name).  Every status is fetched once as a pool, so
+    toggling filters is instant; ~P~ switches project
+  - Quickfind (~SPC a z p f~): helm over a project's tasks, one
+    section per status
   - Tasks open as org-mode documents with Overview / Comments /
     Time Logs tabs; the Details section carries status, owner,
     dates, duration, work hours and completion
@@ -78,22 +83,24 @@ sharing the Desk ones, add =machine zoho-projects login client-id
   / =accounts.zoho.eu=).
 - =zoho-projects-portal-id= :: only needed if the token can see
   several portals; a single portal is picked up automatically.
-- =zoho-projects-project-status= :: which projects the sidebar
-  lists (=active= by default).
-- =zoho-projects-task-filter= :: initial task filter
-  (=notcompleted= by default; ~c~ in the table toggles =all=).
+- =zoho-projects-project-status= :: which projects the selector
+  offers (=active= by default).
 - =zoho-projects-default-bill-status= :: prefill of the New Time
   Log's Billing field (=Billable=).
 - =zoho-projects-timelog-months= :: how many months of project
   time logs the Time Logs tab scans (the API only serves logs per
   project and month; default 12).
-- =zoho-projects-sidebar-width= :: width of the projects pane.
+- =zoho-projects-sidebar-width= :: width of the statuses pane.
+- =zoho-projects-task-fetch-limit= :: how many of a project's tasks
+  are fetched (all statuses) as the shared pool the dashboard
+  filters and quickfind search (default 500).
 
 * Key bindings
 
 | Key Binding   | Description                                     |
 |---------------+-------------------------------------------------|
 | ~SPC a z p d~ | Open the dashboard                              |
+| ~SPC a z p f~ | Quickfind: helm over a project's tasks, every status |
 | ~SPC a z p a~ | One-time OAuth grant-code exchange              |
 | ~SPC a z p t~ | Add a time log to a task                        |
 | ~SPC a z p l~ | Log org-clocked time of the entry at point      |
@@ -101,23 +108,25 @@ sharing the Desk ones, add =machine zoho-projects login client-id
 | ~SPC a z p o~ | Finish the task timer → fill its New Time Log   |
 | ~SPC a z p k~ | Cancel the task timer                           |
 
-Projects sidebar (left pane):
+Statuses sidebar (left pane):
 
-| Key         | Description                      |
-|-------------+----------------------------------|
-| ~RET~ / click | Show the project's tasks       |
-| ~g~ / ~gr~  | Refetch projects from Zoho       |
-| ~o~         | Open project in browser          |
-| ~q~         | Close dashboard, restore windows |
+| Key         | Description                          |
+|-------------+--------------------------------------|
+| ~RET~ / ~SPC~ / ~x~ / click | Toggle the status checkbox (OR) |
+| ~P~         | Switch project (selector)            |
+| ~g~ / ~gr~  | Refetch the project's tasks          |
+| ~f~         | Quickfind tasks (all statuses)       |
+| ~o~         | Open project in browser              |
+| ~q~         | Close dashboard, restore windows     |
 
 Task table (right pane):
 
 | Key   | Description                              |
 |-------+------------------------------------------|
 | ~RET~ | Open task as org document                |
-| ~g~ / ~gr~ | Refresh                             |
-| ~]~ / ~[~ | Next / previous page                 |
-| ~c~   | Toggle completed tasks in the list       |
+| ~P~   | Switch project (selector)                |
+| ~g~ / ~gr~ | Refetch the project's tasks         |
+| ~f~   | Quickfind tasks (all statuses)           |
 | ~t~   | Add time log to task at point            |
 | ~T~   | Start the task timer on task at point    |
 | ~w~   | Copy org heading with the task's ids     |

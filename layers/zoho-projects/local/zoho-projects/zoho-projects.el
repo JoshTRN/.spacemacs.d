@@ -8,9 +8,12 @@
 
 ;; A Zoho Projects client shaped like the zoho-desk dashboard:
 ;;
-;; - `zoho-projects-dashboard'      two panes: the portal's projects on
-;;                                  the left, the selected project's
-;;                                  tasks on the right
+;; - `zoho-projects-dashboard'      pick a project, then two panes: the
+;;                                  project's task statuses as OR-filter
+;;                                  checkboxes on the left, the checked
+;;                                  statuses' tasks on the right
+;; - `zoho-projects-quickfind'      helm over a project's tasks, one
+;;                                  section per status
 ;; - RET on a task                  org-mode task document with Overview,
 ;;                                  Comments and Time Logs tabs
 ;; - `zoho-projects-add-time-entry' post a time log to a task
@@ -134,15 +137,12 @@ used; several portals prompt once per session."
   "How many projects are fetched for the sidebar (parallel pages of 100)."
   :type 'integer)
 
-(defcustom zoho-projects-task-page-size 100
-  "Number of tasks fetched per page of the task table."
+(defcustom zoho-projects-task-fetch-limit 500
+  "How many of a project's tasks are fetched, across every status.
+The dashboard fetches this many tasks (in parallel pages of 100)
+as one pool; the sidebar's status filters and quickfind both draw
+from it."
   :type 'integer)
-
-(defcustom zoho-projects-task-filter "notcompleted"
-  "Initial task status filter of the task table: notcompleted or all.
-Toggle per session with `zoho-projects-toggle-completed' (c in the
-table)."
-  :type '(choice (const "notcompleted") (const "all")))
 
 (defcustom zoho-projects-sidebar-width 42
   "Width of the projects sidebar in the dashboard."
@@ -808,78 +808,41 @@ A single visible portal is used silently; several prompt once."
   "Cached list of project alists for the sidebar.")
 (defvar zoho-projects--project nil
   "Project alist whose tasks the table shows, or nil.")
-(defvar zoho-projects--from 0
-  "Current task pagination offset (item count, 0-based).")
-(defvar zoho-projects--filter nil
-  "Session task status filter; nil falls back to the defcustom.")
+(defvar zoho-projects--tasks-pool nil
+  "Every fetched task of the selected project, all statuses.")
+(defvar zoho-projects--selected-statuses nil
+  "Status names checked in the sidebar; the table shows their union.")
 (defvar zoho-projects--saved-window-configuration nil)
 
-(defconst zoho-projects--projects-buffer-name "*zoho-projects*")
+(defconst zoho-projects--statuses-buffer-name "*zoho-project-statuses*")
 (defconst zoho-projects--tasks-buffer-name "*zoho-project-tasks*")
 
 (defvar zoho-projects--task-buffer nil
   "Single buffer reused for task documents, renamed per task.")
 
-(defun zoho-projects--current-filter ()
-  "Return the active task status filter."
-  (or zoho-projects--filter zoho-projects-task-filter))
+(defun zoho-projects--status-groups (tasks)
+  "Group TASKS into an ordered alist of (STATUS-NAME . TASKS).
+Statuses keep their order of first appearance, except that
+closed-type statuses (their tasks are completed) sink to the end."
+  (let ((groups nil))
+    (dolist (task tasks)
+      (let* ((status (zoho-projects--task-status task))
+             (group (assoc status groups)))
+        (if group
+            (push task (cdr group))
+          (push (list status task) groups))))
+    (setq groups (mapcar (lambda (g) (cons (car g) (nreverse (cdr g))))
+                         (nreverse groups)))
+    (append (seq-remove (lambda (g) (alist-get 'completed (cadr g))) groups)
+            (seq-filter (lambda (g) (alist-get 'completed (cadr g))) groups))))
 
-;;;; Projects pane
+(defun zoho-projects--open-status-names (tasks)
+  "Return the status names of TASKS whose tasks are not completed."
+  (mapcar #'car
+          (seq-remove (lambda (g) (alist-get 'completed (cadr g)))
+                      (zoho-projects--status-groups tasks))))
 
-(defvar zoho-projects-projects-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'zoho-projects-open-project-at-point)
-    (define-key map (kbd "<mouse-1>") #'zoho-projects-mouse-open-project)
-    (define-key map (kbd "g") #'zoho-projects-refresh-projects)
-    (define-key map (kbd "o") #'zoho-projects-browse-project)
-    (define-key map (kbd "q") #'zoho-projects-quit)
-    map))
-
-(define-derived-mode zoho-projects-projects-mode special-mode "ZohoProjects"
-  "Sidebar listing the portal's projects.
-
-\\{zoho-projects-projects-mode-map}"
-  (setq truncate-lines t)
-  (setq-local window-size-fixed 'width))
-
-(defun zoho-projects--insert-project-row (project)
-  "Insert one row for PROJECT."
-  (let* ((selected (and zoho-projects--project
-                        (equal (zoho-projects--id project)
-                               (zoho-projects--id zoho-projects--project))))
-         (key (or (alist-get 'key project) ""))
-         (open (alist-get 'open (alist-get 'task_count project)))
-         (start (point)))
-    (insert (format "%-9s %s%s\n"
-                    key
-                    (truncate-string-to-width
-                     (or (alist-get 'name project) "?")
-                     (- zoho-projects-sidebar-width 16) nil nil "…")
-                    (if (and open (> open 0)) (format "  %d" open) "")))
-    (add-text-properties start (point)
-                         `(zoho-projects-project ,project
-                           mouse-face highlight
-                           face ,(if selected 'zoho-projects-accent
-                                   'default)))))
-
-(defun zoho-projects--render-projects ()
-  "Render the project list into the sidebar."
-  (with-current-buffer (get-buffer-create
-                        zoho-projects--projects-buffer-name)
-    (unless (derived-mode-p 'zoho-projects-projects-mode)
-      (zoho-projects-projects-mode))
-    (let ((inhibit-read-only t)
-          (line (line-number-at-pos)))
-      (erase-buffer)
-      (if (null zoho-projects--projects)
-          (insert (propertize "Fetching projects…\n" 'face 'shadow))
-        (insert (propertize
-                 (format "%s Projects (RET opens tasks)\n\n"
-                         (capitalize zoho-projects-project-status))
-                 'face 'bold))
-        (mapc #'zoho-projects--insert-project-row zoho-projects--projects))
-      (goto-char (point-min))
-      (forward-line (1- line)))))
+;;;; Project selection
 
 (defvar zoho-projects--projects-generation 0
   "Bumped per projects fetch so a stale response cannot win.")
@@ -914,7 +877,7 @@ parallel pages of 100."
              (funcall callback (nreverse projects) nil))))))))
 
 (defun zoho-projects-refresh-projects ()
-  "Refetch the project list from Zoho in the background, then redraw."
+  "Refetch the project list (the selector's candidates) from Zoho."
   (interactive)
   (message "Zoho Projects: refetching projects…")
   (zoho-projects--fetch-projects-async
@@ -922,35 +885,136 @@ parallel pages of 100."
      (if err
          (message "Zoho Projects: %s" err)
        (setq zoho-projects--projects projects)
-       (zoho-projects--render-projects)))))
+       (message "Zoho Projects: %d projects" (length projects))))))
 
-(defun zoho-projects-open-project-at-point ()
-  "Show the tasks of the project at point in the table pane."
+(defun zoho-projects--with-projects (continue)
+  "Call CONTINUE with the portal's projects, fetching them when needed."
+  (if zoho-projects--projects
+      (funcall continue zoho-projects--projects)
+    (message "Zoho Projects: fetching projects…")
+    (zoho-projects--fetch-projects-async
+     (lambda (projects err)
+       (cond
+        (err (message "Zoho Projects: %s" err))
+        ((null projects) (message "Zoho Projects: no projects"))
+        (t (setq zoho-projects--projects projects)
+           ;; The selector must not run inside the url.el sentinel.
+           (run-at-time 0 nil continue projects)))))))
+
+(defun zoho-projects--read-project (projects)
+  "Prompt for one of PROJECTS; return its alist."
+  (let* ((default (and zoho-projects--project
+                       (alist-get 'name zoho-projects--project)))
+         (choice (completing-read
+                  "Zoho project: "
+                  (mapcar (lambda (p) (alist-get 'name p)) projects)
+                  nil t nil nil default)))
+    (or (seq-find (lambda (p) (equal (alist-get 'name p) choice))
+                  projects)
+        (user-error "No project named %s" choice))))
+
+(defun zoho-projects-select-project ()
+  "Pick the project the dashboard shows, then load its tasks."
   (interactive)
-  (let ((project (get-text-property (point) 'zoho-projects-project)))
-    (unless project (user-error "No project on this line"))
-    (setq zoho-projects--project project
-          zoho-projects--from 0)
-    (zoho-projects--render-projects)
-    (zoho-projects--refresh-tasks)
-    (when-let* ((win (get-buffer-window zoho-projects--tasks-buffer-name)))
-      (select-window win))))
-
-(defun zoho-projects-mouse-open-project (event)
-  "Open the project clicked in EVENT."
-  (interactive "e")
-  (mouse-set-point event)
-  (zoho-projects-open-project-at-point))
+  (zoho-projects--with-projects
+   (lambda (projects)
+     (let ((project (zoho-projects--read-project projects)))
+       (setq zoho-projects--project project
+             zoho-projects--tasks-pool nil
+             zoho-projects--selected-statuses nil)
+       (zoho-projects--dashboard-layout)
+       (zoho-projects--refresh-pool)))))
 
 (defun zoho-projects-browse-project ()
-  "Open the project at point (or the selected one) in the browser."
+  "Open the selected project in the browser."
   (interactive)
-  (let ((project (or (get-text-property (point) 'zoho-projects-project)
-                     zoho-projects--project
-                     (user-error "No project in context"))))
+  (let ((project (or zoho-projects--project
+                     (user-error "No project selected"))))
     (if-let* ((url (zoho-projects--project-web-url project)))
         (browse-url url)
       (user-error "Cannot derive a web URL for this project"))))
+
+;;;; Statuses sidebar
+
+(defvar zoho-projects-statuses-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'zoho-projects-toggle-status-at-point)
+    (define-key map (kbd "SPC") #'zoho-projects-toggle-status-at-point)
+    (define-key map (kbd "x") #'zoho-projects-toggle-status-at-point)
+    (define-key map (kbd "<mouse-1>") #'zoho-projects-mouse-toggle-status)
+    (define-key map (kbd "g") #'zoho-projects-refresh-tasks)
+    (define-key map (kbd "P") #'zoho-projects-select-project)
+    (define-key map (kbd "f") #'zoho-projects-quickfind)
+    (define-key map (kbd "o") #'zoho-projects-browse-project)
+    (define-key map (kbd "q") #'zoho-projects-quit)
+    map))
+
+(define-derived-mode zoho-projects-statuses-mode special-mode
+  "ZohoProjectStatuses"
+  "Sidebar listing a project's task statuses as OR-filter checkboxes.
+
+\\{zoho-projects-statuses-mode-map}"
+  (setq truncate-lines t)
+  (setq-local window-size-fixed 'width))
+
+(defun zoho-projects--insert-status-row (group)
+  "Insert one checkbox row for GROUP, a (STATUS-NAME . TASKS) pair."
+  (let* ((status (car group))
+         (active (member status zoho-projects--selected-statuses))
+         (start (point)))
+    (insert (format "%s %-24s %d\n"
+                    (if active "[x]" "[ ]")
+                    (truncate-string-to-width status 24 nil nil "…")
+                    (length (cdr group))))
+    (add-text-properties start (point)
+                         `(zoho-projects-status ,status
+                           mouse-face highlight
+                           face ,(if active 'zoho-projects-accent
+                                   'shadow)))))
+
+(defun zoho-projects--render-statuses ()
+  "Render the selected project's statuses into the sidebar."
+  (with-current-buffer (get-buffer-create
+                        zoho-projects--statuses-buffer-name)
+    (unless (derived-mode-p 'zoho-projects-statuses-mode)
+      (zoho-projects-statuses-mode))
+    (let ((inhibit-read-only t)
+          (line (line-number-at-pos)))
+      (erase-buffer)
+      (insert (propertize (if zoho-projects--project
+                              (or (alist-get 'name zoho-projects--project) "?")
+                            "No project")
+                          'face 'bold)
+              (propertize "  (P switches)\n\n" 'face 'shadow))
+      (cond
+       ((null zoho-projects--project)
+        (insert (propertize "P to pick a project.\n" 'face 'shadow)))
+       ((null zoho-projects--tasks-pool)
+        (insert (propertize "Fetching tasks…\n" 'face 'shadow)))
+       (t
+        (insert (propertize "Statuses (RET toggles, OR)\n\n" 'face 'bold))
+        (mapc #'zoho-projects--insert-status-row
+              (zoho-projects--status-groups zoho-projects--tasks-pool))))
+      (goto-char (point-min))
+      (forward-line (1- line)))))
+
+(defun zoho-projects-toggle-status-at-point ()
+  "Toggle the status checkbox at point and re-filter the task table."
+  (interactive)
+  (let ((status (get-text-property (point) 'zoho-projects-status)))
+    (unless status (user-error "No status on this line"))
+    (setq zoho-projects--selected-statuses
+          (if (member status zoho-projects--selected-statuses)
+              (delete status zoho-projects--selected-statuses)
+            (append zoho-projects--selected-statuses (list status))))
+    (zoho-projects--render-statuses)
+    (zoho-projects--render-tasks)))
+
+(defun zoho-projects-mouse-toggle-status (event)
+  "Toggle the status clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (zoho-projects-toggle-status-at-point))
 
 ;;;; Task table pane
 
@@ -958,13 +1022,12 @@ parallel pages of 100."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'zoho-projects-open-task-at-point)
     (define-key map (kbd "g") #'zoho-projects-refresh-tasks)
-    (define-key map (kbd "c") #'zoho-projects-toggle-completed)
+    (define-key map (kbd "f") #'zoho-projects-quickfind)
+    (define-key map (kbd "P") #'zoho-projects-select-project)
     (define-key map (kbd "t") #'zoho-projects-add-time-entry)
     (define-key map (kbd "T") #'zoho-projects-start-task-timer)
     (define-key map (kbd "w") #'zoho-projects-copy-org-snippet)
     (define-key map (kbd "o") #'zoho-projects-browse-task)
-    (define-key map (kbd "]") #'zoho-projects-next-page)
-    (define-key map (kbd "[") #'zoho-projects-previous-page)
     (define-key map (kbd "q") #'zoho-projects-quit)
     map))
 
@@ -1001,139 +1064,241 @@ parallel pages of 100."
                        'face (if overdue 'error 'default))
            (or (alist-get 'name task) "")))))
 
-(defvar zoho-projects--tasks-generation 0
-  "Bumped per task fetch so a stale response cannot win.")
+(defun zoho-projects--visible-tasks ()
+  "Return the pool tasks whose status is checked in the sidebar."
+  (seq-filter (lambda (task)
+                (member (zoho-projects--task-status task)
+                        zoho-projects--selected-statuses))
+              zoho-projects--tasks-pool))
 
-(defun zoho-projects--tasks-mode-line (suffix)
-  "Return the task table's mode-line-process string, plus SUFFIX."
-  (format " [%s, %s%s%s]"
+(defun zoho-projects--tasks-mode-line (visible suffix)
+  "Return the task table's mode-line-process string.
+VISIBLE is the shown task count; SUFFIX trails the description."
+  (format " [%s, %d/%d tasks%s]"
           (if zoho-projects--project
               (or (alist-get 'name zoho-projects--project) "?")
             "no project selected")
-          (if (equal (zoho-projects--current-filter) "all")
-              "all tasks" "open tasks")
-          (if (> zoho-projects--from 0)
-              (format ", from %d" zoho-projects--from)
-            "")
+          visible
+          (length zoho-projects--tasks-pool)
           suffix))
 
-(defun zoho-projects--refresh-tasks ()
-  "Refresh the task table for the selected project, in the background."
-  (interactive)
+(defun zoho-projects--render-tasks (&optional state)
+  "Render the checked statuses' tasks from the pool into the table.
+STATE tags a fetch in flight (`fetching') or a failed one
+\(`failed'); it only affects the placeholder text and mode line."
   (with-current-buffer (get-buffer-create zoho-projects--tasks-buffer-name)
     (unless (derived-mode-p 'zoho-projects-tasks-mode)
       (zoho-projects-tasks-mode))
-    (let ((generation (cl-incf zoho-projects--tasks-generation))
-          (buf (current-buffer))
-          (project zoho-projects--project)
-          (from zoho-projects--from))
-      (if (null project)
-          (progn
-            (setq tabulated-list-entries nil
-                  mode-line-process (zoho-projects--tasks-mode-line ""))
-            (tabulated-list-print t)
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              (insert (propertize
-                       "\n  RET on a project in the sidebar to list tasks.\n"
-                       'face 'shadow))))
-        (setq mode-line-process
-              (zoho-projects--tasks-mode-line ", fetching…"))
-        (force-mode-line-update)
-        (when (null tabulated-list-entries)
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert (propertize "\n  Fetching tasks…\n" 'face 'shadow))))
-        (zoho-projects--request-async
-         "GET" (format "/portal/%s/projects/%s/tasks/"
-                       (zoho-projects--ensure-portal)
-                       (zoho-projects--id project))
-         (lambda (response err)
-           (when (and (= generation zoho-projects--tasks-generation)
-                      (buffer-live-p buf))
-             (with-current-buffer buf
-               (if err
-                   (progn
-                     (setq mode-line-process
-                           (zoho-projects--tasks-mode-line ", fetch failed"))
-                     (force-mode-line-update)
-                     (message "Zoho Projects: %s" err))
-                 (setq tabulated-list-entries
-                       (mapcar #'zoho-projects--task-entry
-                               (alist-get 'tasks response))
-                       mode-line-process
-                       (zoho-projects--tasks-mode-line ""))
-                 (tabulated-list-print t)
-                 (when (null tabulated-list-entries)
-                   (let ((inhibit-read-only t))
-                     (erase-buffer)
-                     (insert (propertize "\n  No tasks here.\n"
-                                         'face 'shadow))))))))
-         :params `(("index" ,(1+ from))
-                   ("range" ,zoho-projects-task-page-size)
-                   ("status" ,(zoho-projects--current-filter))))))))
+    (let ((visible (zoho-projects--visible-tasks)))
+      (setq tabulated-list-entries
+            (mapcar #'zoho-projects--task-entry visible)
+            mode-line-process
+            (zoho-projects--tasks-mode-line
+             (length visible)
+             (pcase state
+               ('fetching ", fetching…")
+               ('failed ", fetch failed")
+               (_ ""))))
+      (tabulated-list-print t)
+      (force-mode-line-update)
+      (when (null tabulated-list-entries)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (propertize
+                   (cond
+                    ((null zoho-projects--project)
+                     "\n  P to pick a project.\n")
+                    ((eq state 'fetching) "\n  Fetching tasks…\n")
+                    ((null zoho-projects--tasks-pool)
+                     "\n  No tasks here.\n")
+                    (t "\n  No status checked in the sidebar.\n"))
+                   'face 'shadow)))))))
+
+(defvar zoho-projects--pool-generation 0
+  "Bumped per task pool fetch so a stale response cannot win.")
+
+(defun zoho-projects--refresh-pool ()
+  "Refetch every task of the selected project, then redraw both panes."
+  (let ((generation (cl-incf zoho-projects--pool-generation))
+        (project zoho-projects--project))
+    (zoho-projects--render-statuses)
+    (zoho-projects--render-tasks (and project 'fetching))
+    (when project
+      (zoho-projects--fetch-all-tasks-async
+       (zoho-projects--id project)
+       (lambda (tasks err)
+         (when (= generation zoho-projects--pool-generation)
+           (if err
+               (progn
+                 (zoho-projects--render-tasks 'failed)
+                 (message "Zoho Projects: %s" err))
+             (setq zoho-projects--tasks-pool tasks)
+             ;; Keep the checked statuses that still exist; when none
+             ;; remain (or none were checked), default to the open ones,
+             ;; falling back to every status.
+             (let ((names (mapcar #'car (zoho-projects--status-groups
+                                         tasks))))
+               (setq zoho-projects--selected-statuses
+                     (or (seq-filter (lambda (s) (member s names))
+                                     zoho-projects--selected-statuses)
+                         (zoho-projects--open-status-names tasks)
+                         names)))
+             (zoho-projects--render-statuses)
+             (zoho-projects--render-tasks))))))))
 
 (defun zoho-projects-refresh-tasks ()
-  "Interactive alias for refreshing the task table."
+  "Refetch the selected project's tasks from Zoho, then redraw."
   (interactive)
-  (zoho-projects--refresh-tasks))
+  (unless zoho-projects--project (user-error "No project selected"))
+  (zoho-projects--refresh-pool))
 
-(defun zoho-projects-toggle-completed ()
-  "Toggle the task table between open-only and all tasks."
-  (interactive)
-  (setq zoho-projects--filter
-        (if (equal (zoho-projects--current-filter) "all")
-            "notcompleted" "all")
-        zoho-projects--from 0)
-  (zoho-projects--refresh-tasks))
+;;;; Quickfind
 
-(defun zoho-projects-next-page ()
-  "Show the next page of tasks."
-  (interactive)
-  (setq zoho-projects--from
-        (+ zoho-projects--from zoho-projects-task-page-size))
-  (zoho-projects--refresh-tasks))
+(declare-function helm "ext:helm")
+(declare-function helm-make-source "ext:helm-source")
+(declare-function helm-make-actions "ext:helm-lib")
 
-(defun zoho-projects-previous-page ()
-  "Show the previous page of tasks."
+(defun zoho-projects--fetch-all-tasks-async (project-id callback)
+  "Fetch PROJECT-ID's tasks of every status as one pool.
+Up to `zoho-projects-task-fetch-limit' tasks are fetched as
+parallel pages; CALLBACK gets (TASKS ERR)."
+  (zoho-projects--request-all-async
+   (mapcar (lambda (from)
+             `("GET" ,(format "/portal/%s/projects/%s/tasks/"
+                              (zoho-projects--ensure-portal) project-id)
+               :params (("index" ,(1+ from))
+                        ("range" 100)
+                        ("status" "all"))
+               :soft-errors t))
+           (number-sequence 0 (1- (max 100 zoho-projects-task-fetch-limit))
+                            100))
+   (lambda (pages err)
+     (if err
+         (funcall callback nil err)
+       (let ((seen (make-hash-table :test #'equal))
+             (tasks nil))
+         (dolist (page pages)
+           (dolist (task (alist-get 'tasks page))
+             (let ((id (zoho-projects--id task)))
+               (unless (gethash id seen)
+                 (puthash id t seen)
+                 (push task tasks)))))
+         (funcall callback (nreverse tasks) nil))))))
+
+(defun zoho-projects--quickfind-candidate (task)
+  "Return TASK's helm candidate as a (DISPLAY . TASK) pair."
+  (cons (format "%-10s %4s%%  %-18s %s"
+                (propertize (or (alist-get 'key task)
+                                (zoho-projects--id task) "?")
+                            'face 'zoho-projects-accent)
+                (or (alist-get 'percent_complete task) "0")
+                (truncate-string-to-width (zoho-projects--task-owners task)
+                                          18 nil nil t)
+                (or (alist-get 'name task) ""))
+        task))
+
+(defun zoho-projects--quickfind-sources (project tasks)
+  "Return one helm source per status found among PROJECT's TASKS.
+Statuses keep their order of first appearance, except that
+closed-type statuses (their tasks are completed) sink to the end."
+  (let ((actions
+         (helm-make-actions
+          "Open task"
+          (lambda (task)
+            (zoho-projects--show-task project
+                                      (zoho-projects--id task)
+                                      (alist-get 'key task)))
+          "Open in browser"
+          (lambda (task)
+            (browse-url (or (zoho-projects--task-web-url project task)
+                            (user-error "No web URL for this task")))))))
+    (mapcar (lambda (group)
+              (helm-make-source
+                  (format "%s (%d)" (car group) (length (cdr group)))
+                  'helm-source-sync
+                :candidates (mapcar #'zoho-projects--quickfind-candidate
+                                    (cdr group))
+                :fuzzy-match t
+                :candidate-number-limit (max 500 zoho-projects-task-fetch-limit)
+                :action actions))
+            (zoho-projects--status-groups tasks))))
+
+(defun zoho-projects--quickfind-helm (project tasks)
+  "Fuzzy-find among PROJECT's TASKS with helm, one section per status."
+  (require 'helm)
+  (helm :sources (zoho-projects--quickfind-sources project tasks)
+        :prompt "Task: "
+        :buffer "*helm zoho tasks*"))
+
+(defun zoho-projects--quickfind-project (project)
+  "Fetch PROJECT's tasks, then quickfind among them."
+  (message "Zoho Projects: fetching tasks of %s…"
+           (alist-get 'name project))
+  (zoho-projects--fetch-all-tasks-async
+   (zoho-projects--id project)
+   (lambda (tasks err)
+     (cond
+      (err (message "Zoho Projects: %s" err))
+      ((null tasks) (message "Zoho Projects: no tasks in %s"
+                             (alist-get 'name project)))
+      ;; helm runs its own minibuffer loop; don't start it from
+      ;; inside the url.el sentinel.
+      (t (run-at-time 0 nil #'zoho-projects--quickfind-helm
+                      project tasks))))))
+
+;;;###autoload
+(defun zoho-projects-quickfind ()
+  "Fuzzy-find a task in a project, across every status.
+Prompts for the project (defaulting to the dashboard's current
+one), fetches up to `zoho-projects-task-fetch-limit' of its tasks
+regardless of status, and lists them in a helm buffer with one
+section per status — closed statuses included, sunk to the end."
   (interactive)
-  (setq zoho-projects--from
-        (max 0 (- zoho-projects--from zoho-projects-task-page-size)))
-  (zoho-projects--refresh-tasks))
+  (zoho-projects--ensure-portal)
+  (zoho-projects--with-projects
+   (lambda (projects)
+     (zoho-projects--quickfind-project
+      (zoho-projects--read-project projects)))))
 
 ;;;; Dashboard layout
 
-;;;###autoload
-(defun zoho-projects-dashboard ()
-  "Open the Zoho Projects dashboard: projects sidebar plus task table.
-The window layout appears immediately; projects (and the selected
-project's tasks) are fetched in the background and stream in."
-  (interactive)
-  (zoho-projects--sync-accent-faces)
-  (zoho-projects--ensure-portal)
+(defun zoho-projects--dashboard-layout ()
+  "Show the dashboard windows: statuses sidebar plus task table."
   (unless (window-configuration-p zoho-projects--saved-window-configuration)
     (setq zoho-projects--saved-window-configuration
           (current-window-configuration)))
   (delete-other-windows)
   (let* ((sidebar (selected-window))
          (table (split-window sidebar zoho-projects-sidebar-width 'right)))
-    (zoho-projects--render-projects)
+    (zoho-projects--render-statuses)
     (with-current-buffer (get-buffer-create zoho-projects--tasks-buffer-name)
       (unless (derived-mode-p 'zoho-projects-tasks-mode)
         (zoho-projects-tasks-mode)))
     (set-window-buffer sidebar
-                       (get-buffer zoho-projects--projects-buffer-name))
+                       (get-buffer zoho-projects--statuses-buffer-name))
     (set-window-buffer table (get-buffer zoho-projects--tasks-buffer-name))
     (set-window-dedicated-p sidebar t)
-    (select-window (if zoho-projects--project table sidebar))
-    (zoho-projects--refresh-tasks)
-    (unless zoho-projects--projects
-      (zoho-projects--fetch-projects-async
-       (lambda (projects err)
-         (if err
-             (message "Zoho Projects: %s" err)
-           (setq zoho-projects--projects projects)
-           (zoho-projects--render-projects)))))))
+    (select-window table)))
+
+;;;###autoload
+(defun zoho-projects-dashboard ()
+  "Open the Zoho Projects dashboard for one project.
+First a project selector prompts (helm under helm-mode); then the
+sidebar lists the project's task statuses as OR-filter checkboxes
+and the table shows the checked statuses' tasks.  Every status is
+fetched once as a pool, so toggling filters is instant.  A
+project already selected this session reopens immediately; switch
+with P."
+  (interactive)
+  (zoho-projects--sync-accent-faces)
+  (zoho-projects--ensure-portal)
+  (if (null zoho-projects--project)
+      (zoho-projects-select-project)
+    (zoho-projects--dashboard-layout)
+    (if zoho-projects--tasks-pool
+        (progn (zoho-projects--render-statuses)
+               (zoho-projects--render-tasks))
+      (zoho-projects--refresh-pool))))
 
 (defun zoho-projects-quit ()
   "Close the dashboard and restore the previous window layout."
@@ -2329,24 +2494,27 @@ notes field ready for `zoho-projects-submit-time-log'."
 ;; Evil's state maps outrank major-mode maps, so RET and friends must be
 ;; registered with Evil directly (same approach as zoho-desk).
 (with-eval-after-load 'evil
-  (evil-set-initial-state 'zoho-projects-projects-mode 'normal)
+  (evil-set-initial-state 'zoho-projects-statuses-mode 'normal)
   (evil-set-initial-state 'zoho-projects-tasks-mode 'normal)
-  (evil-define-key* 'normal zoho-projects-projects-mode-map
-    (kbd "RET") #'zoho-projects-open-project-at-point
-    (kbd "<mouse-1>") #'zoho-projects-mouse-open-project
-    (kbd "g r") #'zoho-projects-refresh-projects
+  (evil-define-key* 'normal zoho-projects-statuses-mode-map
+    (kbd "RET") #'zoho-projects-toggle-status-at-point
+    (kbd "SPC") #'zoho-projects-toggle-status-at-point
+    (kbd "x") #'zoho-projects-toggle-status-at-point
+    (kbd "<mouse-1>") #'zoho-projects-mouse-toggle-status
+    (kbd "g r") #'zoho-projects-refresh-tasks
+    (kbd "P") #'zoho-projects-select-project
+    (kbd "f") #'zoho-projects-quickfind
     (kbd "o") #'zoho-projects-browse-project
     (kbd "q") #'zoho-projects-quit)
   (evil-define-key* 'normal zoho-projects-tasks-mode-map
     (kbd "RET") #'zoho-projects-open-task-at-point
     (kbd "g r") #'zoho-projects-refresh-tasks
-    (kbd "c") #'zoho-projects-toggle-completed
+    (kbd "P") #'zoho-projects-select-project
+    (kbd "f") #'zoho-projects-quickfind
     (kbd "t") #'zoho-projects-add-time-entry
     (kbd "T") #'zoho-projects-start-task-timer
     (kbd "w") #'zoho-projects-copy-org-snippet
     (kbd "o") #'zoho-projects-browse-task
-    (kbd "]") #'zoho-projects-next-page
-    (kbd "[") #'zoho-projects-previous-page
     (kbd "q") #'zoho-projects-quit)
   (dolist (state '(normal motion))
     (evil-define-minor-mode-key state 'zoho-projects-task-minor-mode

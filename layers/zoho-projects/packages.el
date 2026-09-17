@@ -34,6 +34,8 @@
 (defun zoho-projects/init-zoho-projects ()
   (use-package zoho-projects
     :commands (zoho-projects-dashboard
+               zoho-projects-quickfind
+               zoho-projects-select-project
                zoho-projects-authorize
                zoho-projects-add-time-entry
                zoho-projects-log-time-from-org
@@ -45,6 +47,7 @@
     (spacemacs/declare-prefix "azp" "projects")
     (spacemacs/set-leader-keys
       "azpd" 'zoho-projects-dashboard
+      "azpf" 'zoho-projects-quickfind
       "azpa" 'zoho-projects-authorize
       "azpt" 'zoho-projects-add-time-entry
       "azpl" 'zoho-projects-log-time-from-org
@@ -53,16 +56,17 @@
       "azpk" 'zoho-projects-cancel-task-timer)
     :config
     ;; Major-mode leader (, / SPC m) in the dashboard panes.
-    (spacemacs/set-leader-keys-for-major-mode 'zoho-projects-projects-mode
-      "r" 'zoho-projects-refresh-projects
+    (spacemacs/set-leader-keys-for-major-mode 'zoho-projects-statuses-mode
+      "r" 'zoho-projects-refresh-tasks
+      "p" 'zoho-projects-select-project
+      "f" 'zoho-projects-quickfind
       "b" 'zoho-projects-browse-project
       "q" 'zoho-projects-quit)
     (spacemacs/set-leader-keys-for-major-mode 'zoho-projects-tasks-mode
       "o" 'zoho-projects-open-task-at-point
+      "f" 'zoho-projects-quickfind
       "r" 'zoho-projects-refresh-tasks
-      "n" 'zoho-projects-next-page
-      "p" 'zoho-projects-previous-page
-      "c" 'zoho-projects-toggle-completed
+      "p" 'zoho-projects-select-project
       "t" 'zoho-projects-add-time-entry
       "T" 'zoho-projects-start-task-timer
       "w" 'zoho-projects-copy-org-snippet
