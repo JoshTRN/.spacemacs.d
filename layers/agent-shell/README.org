@@ -1,0 +1,37 @@
+#+TITLE: agent-shell layer
+
+* Description
+ACP coding agents (Claude Code, Codex, Gemini, ...) inside Emacs via
+the =agent-shell= package.  The layer owns the package and puts the
+common entry points on the applications prefix.
+
+Buffer-level styling (fenced tool output with language detection,
+variable-pitch prose) lives in =config.el= under the AGENT-SHELL
+heading, not here — it advises package internals and is easier to
+iterate on there.
+
+* Install
+Add =agent-shell= to =dotspacemacs-configuration-layers= (via
+=layers.el=).  The package moves here from =additional-packages.el=.
+
+* Key bindings
+
+| Key Binding   | Description                                        |
+|---------------+----------------------------------------------------|
+| ~SPC a a a~   | Switch to (or start) an agent shell                |
+| ~SPC a a t~   | Toggle the agent shell window                      |
+| ~SPC a a n~   | New shell (prompts for agent)                      |
+| ~SPC a a T~   | New shell in a temp directory                      |
+| ~SPC a a w~   | New shell in a git worktree                        |
+| ~SPC a a b~   | Cycle to another agent-shell buffer                |
+| ~SPC a a R~   | Resume a previous session                          |
+| ~SPC a a F~   | Fork the current session                           |
+| ~SPC a a k~   | Interrupt the busy agent                           |
+| ~SPC a a i~   | Send clipboard image to the shell                  |
+| ~SPC a a I~   | Send clipboard image, prompting for which shell    |
+| ~SPC a a s~   | Take a screenshot and send it                      |
+| ~SPC a a r~   | Send the active region                             |
+| ~SPC a a f~   | Send the current file                              |
+
+Agent-specific starters (e.g. Claude Code on ~SPC a a c~) are bound in
+the host-local config, not here.

@@ -2,7 +2,6 @@
 (setq custom-additional-packages
       '(
         adaptive-wrap
-        agent-shell
         gradle-mode
         direnv
         exec-path-from-shell

@@ -95,4 +95,5 @@
    zoho-tickets
    zoho-projects
    posframe-timer
+   agent-shell
    ))
