@@ -1097,6 +1097,7 @@ Falls back to the first starred view, then the first view."
     (define-key map (kbd "<mouse-1>") #'zoho-desk-mouse-toggle-view)
     (define-key map (kbd "g") #'zoho-desk-refresh-views)
     (define-key map (kbd "D") #'zoho-desk-select-department)
+    (define-key map (kbd "s") #'zoho-desk-toggle-sidebar)
     (define-key map (kbd "q") #'zoho-desk-quit)
     map))
 
@@ -1209,6 +1210,7 @@ Falls back to the first starred view, then the first view."
     (define-key map (kbd "o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "]") #'zoho-desk-next-page)
     (define-key map (kbd "[") #'zoho-desk-previous-page)
+    (define-key map (kbd "s") #'zoho-desk-toggle-sidebar)
     (define-key map (kbd "q") #'zoho-desk-quit)
     map))
 
@@ -1686,6 +1688,21 @@ fetched in the background and stream in."
   (when (window-configuration-p zoho-desk--saved-window-configuration)
     (set-window-configuration zoho-desk--saved-window-configuration))
   (setq zoho-desk--saved-window-configuration nil))
+
+(defun zoho-desk-toggle-sidebar ()
+  "Collapse the views sidebar, or reopen it when it is hidden.
+The ticket table keeps its filters either way; reopening splits
+the sidebar back off the table window at `zoho-desk-sidebar-width'."
+  (interactive)
+  (if-let* ((sidebar (get-buffer-window zoho-desk--views-buffer-name)))
+      (delete-window sidebar)
+    (let* ((table (or (get-buffer-window zoho-desk--tickets-buffer-name)
+                      (user-error "The Zoho Desk dashboard is not open")))
+           ;; Negative SIZE sizes the new window, not the table.
+           (sidebar (split-window table (- zoho-desk-sidebar-width) 'left)))
+      (zoho-desk--render-views)
+      (set-window-buffer sidebar (get-buffer zoho-desk--views-buffer-name))
+      (set-window-dedicated-p sidebar t))))
 
 ;;;; Ticket document (org-mode)
 

@@ -961,6 +961,7 @@ parallel pages of 100."
     (define-key map (kbd "P") #'zoho-projects-select-project)
     (define-key map (kbd "f") #'zoho-projects-quickfind)
     (define-key map (kbd "o") #'zoho-projects-browse-project)
+    (define-key map (kbd "s") #'zoho-projects-toggle-sidebar)
     (define-key map (kbd "q") #'zoho-projects-quit)
     map))
 
@@ -1043,6 +1044,7 @@ parallel pages of 100."
     (define-key map (kbd "T") #'zoho-projects-start-task-timer)
     (define-key map (kbd "w") #'zoho-projects-copy-org-snippet)
     (define-key map (kbd "o") #'zoho-projects-browse-task)
+    (define-key map (kbd "s") #'zoho-projects-toggle-sidebar)
     (define-key map (kbd "q") #'zoho-projects-quit)
     map))
 
@@ -1321,6 +1323,23 @@ with P."
   (when (window-configuration-p zoho-projects--saved-window-configuration)
     (set-window-configuration zoho-projects--saved-window-configuration))
   (setq zoho-projects--saved-window-configuration nil))
+
+(defun zoho-projects-toggle-sidebar ()
+  "Collapse the statuses sidebar, or reopen it when it is hidden.
+The task table keeps its filters either way; reopening splits the
+sidebar back off the table window at `zoho-projects-sidebar-width'."
+  (interactive)
+  (if-let* ((sidebar (get-buffer-window zoho-projects--statuses-buffer-name)))
+      (delete-window sidebar)
+    (let* ((table (or (get-buffer-window zoho-projects--tasks-buffer-name)
+                      (user-error "The Zoho Projects dashboard is not open")))
+           ;; Negative SIZE sizes the new window, not the table.
+           (sidebar (split-window table (- zoho-projects-sidebar-width)
+                                  'left)))
+      (zoho-projects--render-statuses)
+      (set-window-buffer sidebar
+                         (get-buffer zoho-projects--statuses-buffer-name))
+      (set-window-dedicated-p sidebar t))))
 
 ;;;; Task context
 

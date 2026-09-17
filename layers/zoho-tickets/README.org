@@ -135,6 +135,7 @@ Views sidebar (left pane):
 |-----------------+-----------------------------------|
 | ~RET~ / ~x~ / click | Toggle view checkbox (OR filter) |
 | ~g~ / ~gr~      | Refetch views from Zoho           |
+| ~s~             | Collapse/reopen the sidebar       |
 | ~q~             | Close dashboard, restore windows  |
 
 Ticket table (right pane):
@@ -148,6 +149,7 @@ Ticket table (right pane):
 | ~T~   | Start the ticket timer on ticket at point |
 | ~w~   | Copy org heading with ZOHO_TICKET_ID |
 | ~o~   | Open ticket in browser               |
+| ~s~   | Collapse/reopen the views sidebar    |
 | ~q~   | Close dashboard, restore windows     |
 
 Ticket document (org buffer, =zoho-desk-ticket-minor-mode=). The

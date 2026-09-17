@@ -61,6 +61,7 @@
       "p" 'zoho-projects-select-project
       "f" 'zoho-projects-quickfind
       "b" 'zoho-projects-browse-project
+      "s" 'zoho-projects-toggle-sidebar
       "q" 'zoho-projects-quit)
     (spacemacs/set-leader-keys-for-major-mode 'zoho-projects-tasks-mode
       "o" 'zoho-projects-open-task-at-point
@@ -73,6 +74,7 @@
       "y" 'zoho-projects-copy-task-url
       "#" 'zoho-projects-copy-task-key
       "b" 'zoho-projects-browse-task
+      "s" 'zoho-projects-toggle-sidebar
       "q" 'zoho-projects-quit)
     ;; Task documents are org-mode; the zoho commands ride the
     ;; minor-mode leader so org's own leader keys stay available.

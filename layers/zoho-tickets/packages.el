@@ -100,6 +100,7 @@ Each entry is either:
       "t" 'zoho-desk-toggle-view-at-point
       "r" 'zoho-desk-refresh-views
       "d" 'zoho-desk-select-department
+      "s" 'zoho-desk-toggle-sidebar
       "q" 'zoho-desk-quit)
     (spacemacs/set-leader-keys-for-major-mode 'zoho-desk-tickets-mode
       "o" 'zoho-desk-open-ticket-at-point
@@ -113,6 +114,7 @@ Each entry is either:
       "#" 'zoho-desk-copy-ticket-number
       "b" 'zoho-desk-browse-ticket
       "d" 'zoho-desk-select-department
+      "s" 'zoho-desk-toggle-sidebar
       "q" 'zoho-desk-quit)
     ;; Ticket documents are org-mode; the zoho commands ride the
     ;; minor-mode leader so org's own leader keys stay available.

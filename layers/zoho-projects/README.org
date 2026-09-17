@@ -123,6 +123,7 @@ Statuses sidebar (left pane):
 | ~g~ / ~gr~  | Refetch the project's tasks          |
 | ~f~         | Quickfind tasks (all statuses)       |
 | ~o~         | Open project in browser              |
+| ~s~         | Collapse/reopen the sidebar          |
 | ~q~         | Close dashboard, restore windows     |
 
 Task table (right pane):
@@ -137,6 +138,7 @@ Task table (right pane):
 | ~T~   | Start the task timer on task at point    |
 | ~w~   | Copy org heading with the task's ids     |
 | ~o~   | Open task in browser                     |
+| ~s~   | Collapse/reopen the statuses sidebar     |
 | ~q~   | Close dashboard, restore windows         |
 
 Task document (org buffer, =zoho-projects-task-minor-mode=).  The
