@@ -1013,6 +1013,44 @@ If `solaire-default-face` is available, use its background; otherwise use the de
   (setf (alist-get "IN PROGRESS" org-modern-todo-faces nil nil #'equal)
         'org-modern-in-progress))
 
+;; Emacs stretches a face's :box and :background over the whole screen
+;; row, so the default-height status labels sink to the baseline of
+;; the scaled headings, leaving a tall empty box above the keyword.
+;; The row cannot shrink around the label — the heading text
+;; legitimately sets its height — so instead the label text scales up
+;; to its heading's height and fills the box, which also centers it.
+(defun org-modern-heading-label-matcher (limit)
+  "Match a heading's todo keyword before LIMIT."
+  (and org-todo-regexp
+       (re-search-forward
+        (concat "^\\(\\*+\\)[ \t]+\\(" org-todo-regexp "\\)\\(?:[ \t]\\|$\\)")
+        limit t)))
+
+(defun org-modern-heading-label-height ()
+  "Face plist scaling the matched todo label to its heading's height."
+  (let* ((level (- (match-end 1) (match-beginning 1)))
+         (face (if org-cycle-level-faces
+                   (nth (% (1- level) org-n-level-faces) org-level-faces)
+                 (nth (1- (min level org-n-level-faces)) org-level-faces)))
+         (height (face-attribute face :height nil 'default)))
+    (list :height (if (integerp height)
+                      (/ (float height)
+                         (face-attribute 'default :height nil 'default))
+                    height))))
+
+(defun org-modern-scale-heading-labels ()
+  "Scale todo labels to their headings' heights.
+Added on `org-modern-mode-hook' so the keyword lands after
+org-modern's own, whose fontifier replaces the label face
+outright; prepending over its result keeps the chip colors."
+  (font-lock-add-keywords
+   nil
+   '((org-modern-heading-label-matcher
+      (2 (org-modern-heading-label-height) prepend)))
+   'append))
+
+(add-hook 'org-modern-mode-hook #'org-modern-scale-heading-labels)
+
 (defvar org-modern-debug nil
   "When non-nil, log org-modern face fallback decisions at startup.")
 
