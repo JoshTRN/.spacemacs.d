@@ -114,6 +114,36 @@ so output that merely contains a fenced block still gets wrapped."
       (and (string-match closing text (match-end 0))
            (= (match-end 0) (length text))))))
 
+(defun agent-shell-stored-tool-call (tool-call-id)
+  "Find TOOL-CALL-ID's stored tool call across agent-shell buffers."
+  (catch 'found
+    (dolist (buffer (buffer-list))
+      (when-let* ((state (buffer-local-value 'agent-shell--state buffer))
+                  (tool-call (map-nested-elt state
+                                             (list :tool-calls tool-call-id))))
+        (throw 'found tool-call)))))
+
+(defun agent-shell-fence-output-language (acp-update)
+  "Fence language for ACP-UPDATE's tool output, or nil.
+The completed update carries no file path, so the tool call is looked
+up by id in the shell buffers' state (the initial tool_call notification
+stored its rawInput there).  The language is the file's major mode per
+`auto-mode-alist' minus the -mode suffix, mirroring how the renderer
+resolves it back (`agent-shell-markdown--resolve-lang-mode')."
+  (when-let* ((tool-call-id (map-elt acp-update 'toolCallId))
+              (tool-call (agent-shell-stored-tool-call tool-call-id))
+              (path (or (map-nested-elt tool-call '(:raw-input file_path))
+                        (map-nested-elt tool-call '(:raw-input path))
+                        (map-nested-elt tool-call '(:raw-input notebook_path))
+                        (map-nested-elt (seq-first (map-elt tool-call :locations))
+                                        '(path))))
+              (mode (assoc-default path auto-mode-alist #'string-match)))
+    (when (consp mode)                  ; (mode . rest) entries
+      (setq mode (car mode)))
+    (when (symbolp mode)
+      (string-remove-suffix
+       "-mode" (string-remove-suffix "-ts-mode" (symbol-name mode))))))
+
 (defun agent-shell-fence-output-advised (original &rest args)
   "Render tool output from ORIGINAL with ARGS as a literal code block."
   (let ((output (string-trim-right (apply original args))))
@@ -127,8 +157,10 @@ so output that merely contains a fenced block still gets wrapped."
           (setq length (max length (1+ (- (match-end 0)
                                          (match-beginning 0))))
                 position (match-end 0)))
-        (let ((fence (make-string length ?`)))
-          (concat fence "text\n" output "\n" fence))))))
+        (let ((fence (make-string length ?`))
+              (language (or (agent-shell-fence-output-language (car args))
+                            "text")))
+          (concat fence language "\n" output "\n" fence))))))
 
 (with-eval-after-load 'agent-shell
   (advice-add 'agent-shell--tool-call-update-output-markdown
