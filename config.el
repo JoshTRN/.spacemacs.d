@@ -758,6 +758,7 @@ but reset any face remapping applied elsewhere."
 
 (spacemacs/set-leader-keys
   "omr" #'mini-posframe-resize
+  "oms" #'mini-posframe-select-position
 
   ;; Top row
   "omq" #'mini-posframe-top-left
