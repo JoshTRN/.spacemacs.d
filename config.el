@@ -492,16 +492,15 @@ but reset any face remapping applied elsewhere."
 (add-to-list 'auto-mode-alist '("\\.js\\'" . typescript-mode))
 (add-to-list 'auto-mode-alist '("\\.jsx\\'" . typescript-tsx-mode))
 
-;; On Emacs 31 these die with "Invalid face box: :color, unspecified,
-;; :line-width, (-1 . -1)" -- dap-mouse.el and dap-overlays.el declare
-;; `:box (:line-width -1 :color ...)' faces that no longer validate. The
-;; signal propagates out of `require' and out of `load', so everything below
-;; this point in config.el silently never ran. Demote it to a message: dap
-;; stays half-loaded either way, but the rest of the file survives.
-(with-demoted-errors "dap require failed: %S"
-  (require 'dap-node)
-  (require 'dap-chrome)
-  (require 'dap-firefox))
+;; Disabled 2026-09: unused for ages, and each require warned at startup
+;; about missing VS Code debug adapters (dap-node-setup etc. never run).
+;; They also half-die on Emacs 31 ("Invalid face box" in dap-mouse.el /
+;; dap-overlays.el). Re-enable + run M-x dap-node-setup if dap debugging
+;; is ever needed again.
+;; (with-demoted-errors "dap require failed: %S"
+;;   (require 'dap-node)
+;;   (require 'dap-chrome)
+;;   (require 'dap-firefox))
 
 (remove-hook 'org-present-mode-hook 'spacemacs//org-present-start)
 
@@ -879,41 +878,49 @@ If `solaire-default-face` is available, use its background; otherwise use the de
   (setf (alist-get "IN PROGRESS" org-modern-todo-faces nil nil #'equal)
         'org-modern-in-progress))
 
+(defvar org-modern-debug nil
+  "When non-nil, log org-modern face fallback decisions at startup.")
+
+(defun org-modern-log (fmt &rest args)
+  "Log FMT with ARGS when `org-modern-debug' is non-nil."
+  (when org-modern-debug
+    (apply #'message (concat "[org-modern debug] " fmt) args)))
+
 (with-eval-after-load 'org
 
   (defun face-defined-by-theme-or-user-p (face)
     (let* ((theme-spec  (face-spec-set face nil 'theme))
            (custom-spec (face-spec-set face nil 'custom)))
-      (message "[org-modern debug] %s: theme=%S custom=%S"
-               face theme-spec custom-spec)
+      (org-modern-log "%s: theme=%S custom=%S"
+                             face theme-spec custom-spec)
       (or theme-spec custom-spec)))
 
-  (message "[org-modern debug] --- Checking org-modern date/time fallback logic ---")
+  (org-modern-log "--- Checking org-modern date/time fallback logic ---")
 
   ;; DATE ACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-date-active)
-    (message "[org-modern debug] Applying fallback: org-modern-date-active")
+    (org-modern-log "Applying fallback: org-modern-date-active")
     (custom-set-faces
      '(org-modern-date-active
        ((t (:foreground "gray85" :background "gray20"))))))
 
   ;; DATE INACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-date-inactive)
-    (message "[org-modern debug] Applying fallback: org-modern-date-inactive")
+    (org-modern-log "Applying fallback: org-modern-date-inactive")
     (custom-set-faces
      '(org-modern-date-inactive
        ((t (:foreground "gray70" :background "gray20"))))))
 
   ;; TIME ACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-time-active)
-    (message "[org-modern debug] Applying fallback: org-modern-time-active")
+    (org-modern-log "Applying fallback: org-modern-time-active")
     (custom-set-faces
      '(org-modern-time-active
        ((t (:foreground "gray85" :background "gray20"))))))
 
   ;; TIME INACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-time-inactive)
-    (message "[org-modern debug] Applying fallback: org-modern-time-inactive")
+    (org-modern-log "Applying fallback: org-modern-time-inactive")
     (custom-set-faces
      '(org-modern-time-inactive
        ((t (:foreground "gray70" :background "gray20")))))))
@@ -936,7 +943,7 @@ If `solaire-default-face` is available, use its background; otherwise use the de
             (lambda ()
               ;; ensure face is set (optional if theme already does it)
               (set-face-background 'lsp-ui-doc-background "#060013")
-              (when-let ((frame (lsp-ui-doc--get-frame)))
+              (when-let* ((frame (lsp-ui-doc--get-frame)))
                 (set-frame-parameter
                  frame 'background-color
                  (face-background 'lsp-ui-doc-background frame t)))))
@@ -944,7 +951,7 @@ If `solaire-default-face` is available, use its background; otherwise use the de
   ;; 2) Frame *buffer* mode hook: also 0-arg lambda
   (add-hook 'lsp-ui-doc-frame-mode-hook
             (lambda ()
-              (when-let ((frame (lsp-ui-doc--get-frame)))
+              (when-let* ((frame (lsp-ui-doc--get-frame)))
                 (set-frame-parameter
                  frame 'background-color
                  (face-background 'lsp-ui-doc-background frame t)))))
