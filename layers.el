@@ -94,4 +94,5 @@
    yaml
    zoho-tickets
    zoho-projects
+   posframe-timer
    ))
