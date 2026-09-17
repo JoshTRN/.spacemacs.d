@@ -175,6 +175,21 @@ keep their formatting as org markup.  When nil, or when the
 program is not installed, they degrade to plain text."
   :type '(choice (string :tag "Program") (const :tag "Disabled" nil)))
 
+(defcustom zoho-projects-status-colors
+  '(("Open" . "#5cc064")
+    ("Closed" . "#f2635e")
+    ("In Progress" . "#1cb8ec")
+    ("Planned" . "#fdc428")
+    ("On Hold" . "#c7a267")
+    ("Delayed" . "#9aa0a6")
+    ("UAT" . "#3ce2a7"))
+  "Status badge colors, matching the Zoho Projects status dots.
+Keys are status names, matched case-insensitively; the color
+becomes the badge background of the task document's status
+heading.  Unlisted statuses fall back to the plain org-modern
+todo/done faces."
+  :type '(alist :key-type string :value-type color))
+
 (defcustom zoho-projects-request-timeout 30
   "Timeout in seconds for API requests."
   :type 'integer)
@@ -1424,9 +1439,63 @@ fields."
       (goto-char (cdr hit))
       t)))
 
+(defun zoho-projects--status-badge-matcher (limit)
+  "Font-lock matcher for the status badge heading text before LIMIT."
+  (let* ((start (if (get-text-property (point) 'zoho-projects-status-badge)
+                    (point)
+                  (next-single-property-change
+                   (point) 'zoho-projects-status-badge nil limit)))
+         (end (and start (< start limit)
+                   (get-text-property start 'zoho-projects-status-badge)
+                   (next-single-property-change
+                    start 'zoho-projects-status-badge nil limit))))
+    (when end
+      (set-match-data (list start end))
+      (goto-char end)
+      t)))
+
+(defun zoho-projects--badge-background (color)
+  "Return COLOR blended into the theme background, mostly background.
+The badge background reads as COLOR at low opacity; nil when the
+colors do not resolve (tty frames)."
+  (let ((fg (color-name-to-rgb color))
+        (bg (color-name-to-rgb (face-background 'default nil t))))
+    (when (and fg bg)
+      (apply #'color-rgb-to-hex
+             `(,@(cl-mapcar (lambda (c b) (+ (* 0.25 c) (* 0.75 b)))
+                            fg bg)
+               2)))))
+
+(defun zoho-projects--status-badge-face ()
+  "Return the face of the status badge at the current match.
+The status reads as a * TODO keyword badge: org-modern's label
+look when available (org's own todo/done faces otherwise), in the
+status's `zoho-projects-status-colors' color — text and border in
+the color itself, over a dim blend of it into the theme
+background."
+  (let* ((done (eq (get-text-property (match-beginning 0)
+                                      'zoho-projects-status-badge)
+                   'done))
+         (base (if done
+                   (if (facep 'org-modern-done) 'org-modern-done 'org-done)
+                 (if (facep 'org-modern-todo) 'org-modern-todo 'org-todo)))
+         (color (cdr (assoc-string
+                      (buffer-substring-no-properties (match-beginning 0)
+                                                      (match-end 0))
+                      zoho-projects-status-colors t))))
+    (if color
+        `(:inherit ,base
+          :foreground ,color
+          :background ,(or (zoho-projects--badge-background color)
+                           'unspecified)
+          :box (:color ,color :line-width -1))
+      base)))
+
 (defconst zoho-projects--input-font-lock-keywords
-  '((zoho-projects--input-field-matcher (0 'zoho-projects-input append)))
-  "Font-lock keywords painting the input field backgrounds.")
+  '((zoho-projects--input-field-matcher (0 'zoho-projects-input append))
+    (zoho-projects--status-badge-matcher
+     (0 (zoho-projects--status-badge-face) t)))
+  "Font-lock keywords for the input backgrounds and the status badge.")
 
 (define-minor-mode zoho-projects-task-minor-mode
   "Commands and tabs on top of an org-mode Zoho task document.
@@ -1610,10 +1679,16 @@ the entries in once the month fetches answer."
     (insert (format "#+title: %s %s\n\n"
                     (or (alist-get 'key task) "")
                     (or (alist-get 'name task) "?")))
+    ;; The status stands alone as a heading-sized badge, styled like
+    ;; an org-modern * TODO keyword by the font-lock matcher.
+    (insert "* "
+            (propertize (upcase (zoho-projects--task-status task))
+                        'zoho-projects-status-badge
+                        (if (alist-get 'completed task) 'done 'todo))
+            "\n")
     (insert "* Details\n"
             (format "- Project :: %s\n"
                     (or (alist-get 'name project) "-"))
-            (format "- Status :: %s\n" (zoho-projects--task-status task))
             (format "- Owner :: %s\n" (zoho-projects--task-owners task))
             (format "- Priority :: %s\n"
                     (or (alist-get 'priority task) "None"))
