@@ -1454,6 +1454,27 @@ fields."
       (goto-char end)
       t)))
 
+(defun zoho-projects--status-badge-star-matcher (limit)
+  "Font-lock matcher for the badge heading's leading star before LIMIT.
+The star is hidden by the org bullet setup, but its face — the
+scaled, variable-pitch `org-level-1' — still sets the row's
+ascent, sinking the badge text to the baseline of a much taller
+line.  Matching it here re-faces it to the default height so the
+badge line hugs the badge."
+  (let* ((start (if (get-text-property (point)
+                                       'zoho-projects-status-badge-star)
+                    (point)
+                  (next-single-property-change
+                   (point) 'zoho-projects-status-badge-star nil limit)))
+         (end (and start (< start limit)
+                   (get-text-property start 'zoho-projects-status-badge-star)
+                   (next-single-property-change
+                    start 'zoho-projects-status-badge-star nil limit))))
+    (when end
+      (set-match-data (list start end))
+      (goto-char end)
+      t)))
+
 (defun zoho-projects--badge-background (color)
   "Return COLOR blended into the theme background, mostly background.
 The badge background reads as COLOR at low opacity; nil when the
@@ -1480,8 +1501,9 @@ background."
                    (if (facep 'org-modern-done) 'org-modern-done 'org-done)
                  (if (facep 'org-modern-todo) 'org-modern-todo 'org-todo)))
          (color (cdr (assoc-string
-                      (buffer-substring-no-properties (match-beginning 0)
-                                                      (match-end 0))
+                      (string-trim
+                       (buffer-substring-no-properties (match-beginning 0)
+                                                       (match-end 0)))
                       zoho-projects-status-colors t))))
     (if color
         `(:inherit ,base
@@ -1494,7 +1516,8 @@ background."
 (defconst zoho-projects--input-font-lock-keywords
   '((zoho-projects--input-field-matcher (0 'zoho-projects-input append))
     (zoho-projects--status-badge-matcher
-     (0 (zoho-projects--status-badge-face) t)))
+     (0 (zoho-projects--status-badge-face) t))
+    (zoho-projects--status-badge-star-matcher (0 'default t)))
   "Font-lock keywords for the input backgrounds and the status badge.")
 
 (define-minor-mode zoho-projects-task-minor-mode
@@ -1680,9 +1703,14 @@ the entries in once the month fetches answer."
                     (or (alist-get 'key task) "")
                     (or (alist-get 'name task) "?")))
     ;; The status stands alone as a heading-sized badge, styled like
-    ;; an org-modern * TODO keyword by the font-lock matcher.
-    (insert "* "
-            (propertize (upcase (zoho-projects--task-status task))
+    ;; an org-modern * TODO keyword by the font-lock matcher.  The
+    ;; surrounding spaces live inside the badge, giving the label a
+    ;; character of padding within the border; the marked star gets
+    ;; re-faced to the default height so the hidden bullet's huge
+    ;; `org-level-1' ascent cannot push the badge down the line.
+    (insert (propertize "* " 'zoho-projects-status-badge-star t)
+            (propertize (concat " " (upcase (zoho-projects--task-status task))
+                                " ")
                         'zoho-projects-status-badge
                         (if (alist-get 'completed task) 'done 'todo))
             "\n")

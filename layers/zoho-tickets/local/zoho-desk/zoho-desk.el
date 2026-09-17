@@ -236,6 +236,21 @@ Filled in automatically when you confirm the From prompt on a
 ticket whose department has no known support address yet."
   :type '(alist :key-type string :value-type string))
 
+(defcustom zoho-desk-status-colors
+  '(("Open" . "#1cb8ec")
+    ("Escalated to PTC" . "#1cb8ec")
+    ("Waiting on Customer" . "#fdc428")
+    ("On Hold" . "#fdc428")
+    ("Closed" . "#5cc064")
+    ("Copied from PTC" . "#9aa0a6")
+    ("Waiting on IQNOX" . "#9aa0a6"))
+  "Status badge colors, matching the Zoho Desk status dots.
+Keys are status names, matched case-insensitively; the color
+becomes the badge background of the ticket document's status
+heading.  Unlisted statuses fall back to the plain org-modern
+todo/done faces."
+  :type '(alist :key-type string :value-type color))
+
 (defcustom zoho-desk-request-timeout 30
   "Timeout in seconds for API requests."
   :type 'integer)
@@ -1754,9 +1769,85 @@ precedence over the field background."
       (goto-char (cdr hit))
       t)))
 
+(defun zoho-desk--status-badge-matcher (limit)
+  "Font-lock matcher for the status badge heading text before LIMIT."
+  (let* ((start (if (get-text-property (point) 'zoho-desk-status-badge)
+                    (point)
+                  (next-single-property-change
+                   (point) 'zoho-desk-status-badge nil limit)))
+         (end (and start (< start limit)
+                   (get-text-property start 'zoho-desk-status-badge)
+                   (next-single-property-change
+                    start 'zoho-desk-status-badge nil limit))))
+    (when end
+      (set-match-data (list start end))
+      (goto-char end)
+      t)))
+
+(defun zoho-desk--status-badge-star-matcher (limit)
+  "Font-lock matcher for the badge heading's leading star before LIMIT.
+The star is hidden by the org bullet setup, but its face — the
+scaled, variable-pitch `org-level-1' — still sets the row's
+ascent, sinking the badge text to the baseline of a much taller
+line.  Matching it here re-faces it to the default height so the
+badge line hugs the badge."
+  (let* ((start (if (get-text-property (point) 'zoho-desk-status-badge-star)
+                    (point)
+                  (next-single-property-change
+                   (point) 'zoho-desk-status-badge-star nil limit)))
+         (end (and start (< start limit)
+                   (get-text-property start 'zoho-desk-status-badge-star)
+                   (next-single-property-change
+                    start 'zoho-desk-status-badge-star nil limit))))
+    (when end
+      (set-match-data (list start end))
+      (goto-char end)
+      t)))
+
+(defun zoho-desk--badge-background (color)
+  "Return COLOR blended into the theme background, mostly background.
+The badge background reads as COLOR at low opacity; nil when the
+colors do not resolve (tty frames)."
+  (let ((fg (color-name-to-rgb color))
+        (bg (color-name-to-rgb (face-background 'default nil t))))
+    (when (and fg bg)
+      (apply #'color-rgb-to-hex
+             `(,@(cl-mapcar (lambda (c b) (+ (* 0.25 c) (* 0.75 b)))
+                            fg bg)
+               2)))))
+
+(defun zoho-desk--status-badge-face ()
+  "Return the face of the status badge at the current match.
+The status reads as a * TODO keyword badge: org-modern's label
+look when available (org's own todo/done faces otherwise), in the
+status's `zoho-desk-status-colors' color — text and border in
+the color itself, over a dim blend of it into the theme
+background."
+  (let* ((done (eq (get-text-property (match-beginning 0)
+                                      'zoho-desk-status-badge)
+                   'done))
+         (base (if done
+                   (if (facep 'org-modern-done) 'org-modern-done 'org-done)
+                 (if (facep 'org-modern-todo) 'org-modern-todo 'org-todo)))
+         (color (cdr (assoc-string
+                      (string-trim
+                       (buffer-substring-no-properties (match-beginning 0)
+                                                       (match-end 0)))
+                      zoho-desk-status-colors t))))
+    (if color
+        `(:inherit ,base
+          :foreground ,color
+          :background ,(or (zoho-desk--badge-background color)
+                           'unspecified)
+          :box (:color ,color :line-width -1))
+      base)))
+
 (defconst zoho-desk--input-font-lock-keywords
-  '((zoho-desk--input-field-matcher (0 'zoho-desk-input append)))
-  "Font-lock keywords painting the input field backgrounds.
+  '((zoho-desk--input-field-matcher (0 'zoho-desk-input append))
+    (zoho-desk--status-badge-matcher
+     (0 (zoho-desk--status-badge-face) t))
+    (zoho-desk--status-badge-star-matcher (0 'default t)))
+  "Font-lock keywords for the input backgrounds and the status badge.
 Appended after org's own keywords by
 `zoho-desk-ticket-minor-mode', with the `append' face override, so
 the field background sits under whatever org fontifies inside the
@@ -1954,8 +2045,24 @@ the body holds the full description and billing details."
     (insert (format "#+title: #%s %s\n\n"
                     (alist-get 'ticketNumber ticket)
                     (alist-get 'subject ticket)))
+    ;; The status stands alone as a heading-sized badge, styled like
+    ;; an org-modern * TODO keyword by the font-lock matcher.  The
+    ;; surrounding spaces live inside the badge, giving the label a
+    ;; character of padding within the border; the marked star gets
+    ;; re-faced to the default height so the hidden bullet's huge
+    ;; `org-level-1' ascent cannot push the badge down the line.
+    (insert (propertize "* " 'zoho-desk-status-badge-star t)
+            (propertize (concat " " (upcase (or (alist-get 'status ticket)
+                                                "?"))
+                                " ")
+                        'zoho-desk-status-badge
+                        (if (string= (downcase (or (alist-get 'statusType ticket)
+                                                   (alist-get 'status ticket)
+                                                   ""))
+                                     "closed")
+                            'done 'todo))
+            "\n")
     (insert "* Details\n"
-            (format "- Status :: %s\n" (or (alist-get 'status ticket) "-"))
             (format "- Priority :: %s\n" (or (alist-get 'priority ticket) "-"))
             (format "- Due :: %s\n"
                     (if (alist-get 'dueDate ticket)
