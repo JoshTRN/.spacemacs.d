@@ -98,6 +98,68 @@
     (insert "\"\"\");\n")))
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;;                           AGENT-SHELL
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+(defun agent-shell-fence-output-advised (original &rest args)
+  "Render tool output from ORIGINAL with ARGS as a literal code block."
+  (let ((output (apply original args)))
+    (if (string-empty-p output)
+        output
+      ;; Make the fence longer than any backticks in the output.
+      (let ((length 3)
+            (position 0))
+        (while (string-match "`+" output position)
+          (setq length (max length (1+ (- (match-end 0)
+                                         (match-beginning 0))))
+                position (match-end 0)))
+        (let ((fence (make-string length ?`)))
+          (concat fence "text\n" output "\n" fence))))))
+
+(with-eval-after-load 'agent-shell
+  (advice-add 'agent-shell--tool-call-update-output-markdown
+              :around #'agent-shell-fence-output-advised))
+
+(defvar-local my-agent-shell-fonts-configured nil)
+
+(defun my-agent-shell-variable-pitch ()
+  "Use proportional prose and monospace code in this agent-shell buffer."
+  (require 'face-remap)
+  ;; Solaire puts its default-face remap ahead of variable-pitch, masking
+  ;; the proportional font.  Opt this buffer out of its global activation
+  ;; as well, so window changes and theme reloads cannot restore the clash.
+  (setq-local solaire-mode-real-buffer-fn (lambda () t))
+  (when (bound-and-true-p solaire-mode)
+    (solaire-mode -1))
+  (unless my-agent-shell-fonts-configured
+    ;; Keep prose in Open Sans even when a host overrides variable-pitch.
+    (face-remap-add-relative 'variable-pitch
+                            '(:family "Open Sans" :height 140))
+    (dolist (face '(agent-shell-markdown-inline-code
+                    agent-shell-markdown-source-block
+                    agent-shell-markdown-source-block-language
+                    agent-shell-markdown-table
+                    agent-shell-markdown-table-header
+                    agent-shell-markdown-table-border
+                    agent-shell-markdown-table-zebra))
+      (face-remap-add-relative face '(:family "Fira Code" :height 140)))
+    (setq my-agent-shell-fonts-configured t))
+  (variable-pitch-mode 1))
+
+(dolist (hook '(agent-shell-mode-hook
+                agent-shell-viewport-view-mode-hook
+                agent-shell-viewport-edit-mode-hook))
+  (add-hook hook #'my-agent-shell-variable-pitch))
+
+;; Also update existing buffers when this configuration is reloaded.
+(dolist (buffer (buffer-list))
+  (with-current-buffer buffer
+    (when (derived-mode-p 'agent-shell-mode
+                          'agent-shell-viewport-view-mode
+                          'agent-shell-viewport-edit-mode)
+      (my-agent-shell-variable-pitch))))
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           MISC-SETTINGS
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
