@@ -101,10 +101,24 @@
 ;;                           AGENT-SHELL
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+(defun agent-shell-fenced-block-p (text)
+  "Non-nil when TEXT is already a single fenced code block.
+The opening fence must start TEXT and its closing fence must end it,
+so output that merely contains a fenced block still gets wrapped."
+  (when (string-match "\\`\\(`\\{3,\\}\\|~\\{3,\\}\\)[^\n]*\n" text)
+    (let* ((fence (match-string 1 text))
+           (marker (substring fence 0 1))
+           ;; A closing fence is at least as long as the opening one.
+           (closing (concat "^[ \t]*" (regexp-quote fence)
+                            (regexp-quote marker) "*[ \t]*$")))
+      (and (string-match closing text (match-end 0))
+           (= (match-end 0) (length text))))))
+
 (defun agent-shell-fence-output-advised (original &rest args)
   "Render tool output from ORIGINAL with ARGS as a literal code block."
-  (let ((output (apply original args)))
-    (if (string-empty-p output)
+  (let ((output (string-trim-right (apply original args))))
+    (if (or (string-empty-p output)
+            (agent-shell-fenced-block-p output))
         output
       ;; Make the fence longer than any backticks in the output.
       (let ((length 3)
