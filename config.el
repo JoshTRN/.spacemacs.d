@@ -147,9 +147,26 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
 (defun agent-shell-fence-output-advised (original &rest args)
   "Render tool output from ORIGINAL with ARGS as a literal code block."
   (let ((output (string-trim-right (apply original args))))
-    (if (or (string-empty-p output)
-            (agent-shell-fenced-block-p output))
-        output
+    (cond
+     ((string-empty-p output)
+      output)
+     ;; Already fenced (Claude fences Read output itself, without a
+     ;; language).  Label a bare opening fence with the detected
+     ;; language so the block gets highlighting; leave a language the
+     ;; agent chose alone.
+     ((agent-shell-fenced-block-p output)
+      (string-match "\\`\\(`\\{3,\\}\\|~\\{3,\\}\\)\\([^\n]*\\)" output)
+      ;; Capture before the language lookup clobbers the match data.
+      (let ((fence (match-string 1 output))
+            (info (match-string 2 output))
+            (rest (substring output (match-end 0))))
+        (if (string-empty-p (string-trim info))
+            (concat fence
+                    (or (agent-shell-fence-output-language (car args))
+                        "text")
+                    rest)
+          output)))
+     (t
       ;; Make the fence longer than any backticks in the output.
       (let ((length 3)
             (position 0))
@@ -160,7 +177,7 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
         (let ((fence (make-string length ?`))
               (language (or (agent-shell-fence-output-language (car args))
                             "text")))
-          (concat fence language "\n" output "\n" fence))))))
+          (concat fence language "\n" output "\n" fence)))))))
 
 (with-eval-after-load 'agent-shell
   (advice-add 'agent-shell--tool-call-update-output-markdown
