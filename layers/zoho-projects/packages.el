@@ -43,6 +43,7 @@
                zoho-projects-finish-task-timer
                zoho-projects-cancel-task-timer)
     :init
+    (setq zoho-projects-user-email "josh.wood@iqnox.com")
     (spacemacs/declare-prefix "az" "zoho")
     (spacemacs/declare-prefix "azp" "projects")
     (spacemacs/set-leader-keys

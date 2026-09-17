@@ -129,6 +129,12 @@ When nil and the token sees exactly one portal, that portal is
 used; several portals prompt once per session."
   :type '(choice (const nil) string))
 
+(defcustom zoho-projects-user-email nil
+  "Email identifying yourself among a task's owners.
+Used by the dashboard's assigned-to-me filter to find you in the
+portal's user list.  When nil, `user-mail-address' is tried."
+  :type '(choice (const nil) string))
+
 (defcustom zoho-projects-project-status "active"
   "Status filter for the projects sidebar (active/archived/template)."
   :type 'string)
@@ -542,9 +548,10 @@ runs exactly once."
                    (kill-buffer)
                    (cond
                     (finished)
-                    (net-error
-                     (funcall finish nil (format "%s %s: %S"
-                                                 method path net-error)))
+                    ;; Check this before net-error: url-http reports a
+                    ;; 401 as a network error when an Authorization
+                    ;; header was already present (Bug#50511), and the
+                    ;; retry must still refresh the stale token.
                     ((and (eq code 401) (> retries 0))
                      (setq finished t
                            zoho-projects--access-token nil)
@@ -552,6 +559,9 @@ runs exactly once."
                             callback
                             (plist-put (copy-sequence opts)
                                        :retries (1- retries))))
+                    (net-error
+                     (funcall finish nil (format "%s %s: %S"
+                                                 method path net-error)))
                     ((memq code '(200 201))
                      (condition-case err
                          (let ((result
@@ -827,6 +837,10 @@ A single visible portal is used silently; several prompt once."
   "Every fetched task of the selected project, all statuses.")
 (defvar zoho-projects--selected-statuses nil
   "Status names checked in the sidebar; the table shows their union.")
+(defvar zoho-projects--only-mine nil
+  "When non-nil, the table only shows tasks assigned to me.")
+(defvar zoho-projects--me nil
+  "Portal user alist of the current user, resolved on first use.")
 (defvar zoho-projects--saved-window-configuration nil)
 
 (defconst zoho-projects--statuses-buffer-name "*zoho-project-statuses*")
@@ -856,6 +870,67 @@ closed-type statuses (their tasks are completed) sink to the end."
   (mapcar #'car
           (seq-remove (lambda (g) (alist-get 'completed (cadr g)))
                       (zoho-projects--status-groups tasks))))
+
+;;;; Assigned-to-me filter
+
+(defun zoho-projects--fetch-me-async (callback)
+  "Resolve me in the project's user list by email; CALLBACK gets (USER ERR).
+Uses the project-scoped users endpoint: the portal-level /users/
+answers 6401 Unauthorized unless the token belongs to a portal
+admin, but any member may list the users of a project they're in."
+  (if zoho-projects--me
+      (funcall callback zoho-projects--me nil)
+    (let ((email (or zoho-projects-user-email user-mail-address)))
+      (cond
+       ((not (and (stringp email) (string-match-p "@" email)))
+        (funcall callback nil
+                 "setq zoho-projects-user-email to your Zoho email"))
+       ((not zoho-projects--project)
+        (funcall callback nil "select a project first"))
+       (t
+        (zoho-projects--request-async
+         "GET" (format "/portal/%s/projects/%s/users/"
+                       (zoho-projects--ensure-portal)
+                       (zoho-projects--id zoho-projects--project))
+         (lambda (data err)
+           (if err
+               (funcall callback nil err)
+             (let ((user (seq-find
+                          (lambda (u)
+                            (let ((candidate (alist-get 'email u)))
+                              (and (stringp candidate)
+                                   (string= (downcase candidate)
+                                            (downcase email)))))
+                          (alist-get 'users data))))
+               (if user
+                   (progn (setq zoho-projects--me user)
+                          (funcall callback user nil))
+                 (funcall callback
+                          nil
+                          (format (concat "no project user has email %s "
+                                          "(setq zoho-projects-user-email)")
+                                  email))))))))))))
+
+(defun zoho-projects--task-mine-p (task)
+  "Return non-nil when `zoho-projects--me' is among TASK's owners."
+  (when-let* ((me zoho-projects--me))
+    (let ((my-id (zoho-projects--id me))
+          (my-email (alist-get 'email me))
+          (my-name (alist-get 'name me)))
+      (seq-some (lambda (owner)
+                  (or (and my-id (equal (zoho-projects--id owner) my-id))
+                      (let ((email (alist-get 'email owner)))
+                        (and (stringp email) (stringp my-email)
+                             (string= (downcase email) (downcase my-email))))
+                      (and my-name (equal (alist-get 'name owner) my-name))))
+                (or (alist-get 'owners (alist-get 'details task))
+                    (alist-get 'owners task))))))
+
+(defun zoho-projects--mine-filter (tasks)
+  "Return TASKS narrowed to mine when the assignee filter is on."
+  (if zoho-projects--only-mine
+      (seq-filter #'zoho-projects--task-mine-p tasks)
+    tasks))
 
 ;;;; Project selection
 
@@ -960,6 +1035,7 @@ parallel pages of 100."
     (define-key map (kbd "g") #'zoho-projects-refresh-tasks)
     (define-key map (kbd "P") #'zoho-projects-select-project)
     (define-key map (kbd "f") #'zoho-projects-quickfind)
+    (define-key map (kbd "m") #'zoho-projects-toggle-only-mine)
     (define-key map (kbd "o") #'zoho-projects-browse-project)
     (define-key map (kbd "s") #'zoho-projects-toggle-sidebar)
     (define-key map (kbd "q") #'zoho-projects-quit)
@@ -974,18 +1050,38 @@ parallel pages of 100."
   (setq-local window-size-fixed 'width))
 
 (defun zoho-projects--insert-status-row (group)
-  "Insert one checkbox row for GROUP, a (STATUS-NAME . TASKS) pair."
+  "Insert one checkbox row for GROUP, a (STATUS-NAME . TASKS) pair.
+The task count honors the assignee filter."
   (let* ((status (car group))
          (active (member status zoho-projects--selected-statuses))
          (start (point)))
     (insert (format "%s %-24s %d\n"
                     (if active "[x]" "[ ]")
                     (truncate-string-to-width status 24 nil nil "…")
-                    (length (cdr group))))
+                    (length (zoho-projects--mine-filter (cdr group)))))
     (add-text-properties start (point)
                          `(zoho-projects-status ,status
                            mouse-face highlight
                            face ,(if active 'zoho-projects-accent
+                                   'shadow)))))
+
+(defun zoho-projects--insert-mine-row ()
+  "Insert the assigned-to-me checkbox row.
+The count is unknown (?) until the portal user list has resolved
+who I am, which happens the first time the filter turns on."
+  (let ((start (point)))
+    (insert (format "%s %-24s %s\n"
+                    (if zoho-projects--only-mine "[x]" "[ ]")
+                    "Assigned to me"
+                    (if zoho-projects--me
+                        (length (seq-filter #'zoho-projects--task-mine-p
+                                            zoho-projects--tasks-pool))
+                      "?")))
+    (add-text-properties start (point)
+                         `(zoho-projects-mine t
+                           mouse-face highlight
+                           face ,(if zoho-projects--only-mine
+                                     'zoho-projects-accent
                                    'shadow)))))
 
 (defun zoho-projects--render-statuses ()
@@ -1010,21 +1106,46 @@ parallel pages of 100."
        (t
         (insert (propertize "Statuses (RET toggles, OR)\n\n" 'face 'bold))
         (mapc #'zoho-projects--insert-status-row
-              (zoho-projects--status-groups zoho-projects--tasks-pool))))
+              (zoho-projects--status-groups zoho-projects--tasks-pool))
+        (insert "\n" (propertize "Assignee (m toggles)\n\n" 'face 'bold))
+        (zoho-projects--insert-mine-row)))
       (goto-char (point-min))
       (forward-line (1- line)))))
 
 (defun zoho-projects-toggle-status-at-point ()
   "Toggle the status checkbox at point and re-filter the task table."
   (interactive)
-  (let ((status (get-text-property (point) 'zoho-projects-status)))
-    (unless status (user-error "No status on this line"))
-    (setq zoho-projects--selected-statuses
-          (if (member status zoho-projects--selected-statuses)
-              (delete status zoho-projects--selected-statuses)
-            (append zoho-projects--selected-statuses (list status))))
-    (zoho-projects--render-statuses)
-    (zoho-projects--render-tasks)))
+  (if (get-text-property (point) 'zoho-projects-mine)
+      (zoho-projects-toggle-only-mine)
+    (let ((status (get-text-property (point) 'zoho-projects-status)))
+      (unless status (user-error "No status on this line"))
+      (setq zoho-projects--selected-statuses
+            (if (member status zoho-projects--selected-statuses)
+                (delete status zoho-projects--selected-statuses)
+              (append zoho-projects--selected-statuses (list status))))
+      (zoho-projects--render-statuses)
+      (zoho-projects--render-tasks))))
+
+(defun zoho-projects-toggle-only-mine ()
+  "Toggle filtering the task table down to tasks assigned to me.
+The first activation resolves who I am from the portal's user
+list (by `zoho-projects-user-email'), then the filter applies on
+top of the checked statuses."
+  (interactive)
+  (if (or zoho-projects--only-mine zoho-projects--me)
+      (progn
+        (setq zoho-projects--only-mine (not zoho-projects--only-mine))
+        (zoho-projects--render-statuses)
+        (zoho-projects--render-tasks))
+    (message "Zoho Projects: resolving who you are…")
+    (zoho-projects--fetch-me-async
+     (lambda (me err)
+       (if err
+           (message "Zoho Projects: %s" err)
+         (setq zoho-projects--only-mine t)
+         (message "Zoho Projects: filtering to %s" (alist-get 'name me))
+         (zoho-projects--render-statuses)
+         (zoho-projects--render-tasks))))))
 
 (defun zoho-projects-mouse-toggle-status (event)
   "Toggle the status clicked in EVENT."
@@ -1039,6 +1160,7 @@ parallel pages of 100."
     (define-key map (kbd "RET") #'zoho-projects-open-task-at-point)
     (define-key map (kbd "g") #'zoho-projects-refresh-tasks)
     (define-key map (kbd "f") #'zoho-projects-quickfind)
+    (define-key map (kbd "m") #'zoho-projects-toggle-only-mine)
     (define-key map (kbd "P") #'zoho-projects-select-project)
     (define-key map (kbd "t") #'zoho-projects-add-time-entry)
     (define-key map (kbd "T") #'zoho-projects-start-task-timer)
@@ -1082,21 +1204,24 @@ parallel pages of 100."
            (or (alist-get 'name task) "")))))
 
 (defun zoho-projects--visible-tasks ()
-  "Return the pool tasks whose status is checked in the sidebar."
-  (seq-filter (lambda (task)
-                (member (zoho-projects--task-status task)
-                        zoho-projects--selected-statuses))
-              zoho-projects--tasks-pool))
+  "Return the pool tasks whose status is checked in the sidebar.
+The assignee filter, when on, applies on top."
+  (zoho-projects--mine-filter
+   (seq-filter (lambda (task)
+                 (member (zoho-projects--task-status task)
+                         zoho-projects--selected-statuses))
+               zoho-projects--tasks-pool)))
 
 (defun zoho-projects--tasks-mode-line (visible suffix)
   "Return the task table's mode-line-process string.
 VISIBLE is the shown task count; SUFFIX trails the description."
-  (format " [%s, %d/%d tasks%s]"
+  (format " [%s, %d/%d tasks%s%s]"
           (if zoho-projects--project
               (or (alist-get 'name zoho-projects--project) "?")
             "no project selected")
           visible
           (length zoho-projects--tasks-pool)
+          (if zoho-projects--only-mine ", mine" "")
           suffix))
 
 (defun zoho-projects--render-tasks (&optional state)
@@ -1128,6 +1253,10 @@ STATE tags a fetch in flight (`fetching') or a failed one
                     ((eq state 'fetching) "\n  Fetching tasks…\n")
                     ((null zoho-projects--tasks-pool)
                      "\n  No tasks here.\n")
+                    ((null zoho-projects--selected-statuses)
+                     "\n  No status checked in the sidebar.\n")
+                    (zoho-projects--only-mine
+                     "\n  None of these tasks are assigned to me.\n")
                     (t "\n  No status checked in the sidebar.\n"))
                    'face 'shadow)))))))
 
@@ -2659,6 +2788,7 @@ notes field ready for `zoho-projects-submit-time-log'."
     (kbd "g r") #'zoho-projects-refresh-tasks
     (kbd "P") #'zoho-projects-select-project
     (kbd "f") #'zoho-projects-quickfind
+    (kbd "m") #'zoho-projects-toggle-only-mine
     (kbd "o") #'zoho-projects-browse-project
     (kbd "q") #'zoho-projects-quit)
   (evil-define-key* 'normal zoho-projects-tasks-mode-map
@@ -2666,6 +2796,7 @@ notes field ready for `zoho-projects-submit-time-log'."
     (kbd "g r") #'zoho-projects-refresh-tasks
     (kbd "P") #'zoho-projects-select-project
     (kbd "f") #'zoho-projects-quickfind
+    (kbd "m") #'zoho-projects-toggle-only-mine
     (kbd "t") #'zoho-projects-add-time-entry
     (kbd "T") #'zoho-projects-start-task-timer
     (kbd "w") #'zoho-projects-copy-org-snippet

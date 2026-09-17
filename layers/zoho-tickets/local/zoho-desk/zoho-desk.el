@@ -747,15 +747,19 @@ built-in timeout) and guarantees CALLBACK runs exactly once."
                    (kill-buffer)
                    (cond
                     (finished)
-                    (net-error
-                     (funcall finish nil (format "%s %s: %S"
-                                                 method path net-error)))
+                    ;; Check this before net-error: url-http reports a
+                    ;; 401 as a network error when an Authorization
+                    ;; header was already present (Bug#50511), and the
+                    ;; retry must still refresh the stale token.
                     ((and (eq code 401) (> retries 0))
                      (setq finished t
                            zoho-desk--access-token nil)
                      (apply #'zoho-desk--request-async method path callback
                             (plist-put (copy-sequence opts)
                                        :retries (1- retries))))
+                    (net-error
+                     (funcall finish nil (format "%s %s: %S"
+                                                 method path net-error)))
                     ((memq code '(200 201))
                      (if (plist-get opts :raw)
                          (funcall finish body nil)
