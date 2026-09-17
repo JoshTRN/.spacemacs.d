@@ -83,13 +83,11 @@
       "l" 'zoho-projects-submit-time-log
       "." 'zoho-projects-pick-date
       "c" 'zoho-projects-add-comment
+      "C" 'zoho-projects-submit-comment
       "t" 'zoho-projects-add-time-entry
       "T" 'zoho-projects-start-task-timer
       "r" 'zoho-projects-refresh-task
       "b" 'zoho-projects-browse-task
       "w" 'zoho-projects-copy-org-snippet
       "y" 'zoho-projects-copy-task-url
-      "#" 'zoho-projects-copy-task-key)
-    (spacemacs/set-leader-keys-for-major-mode 'zoho-projects-comment-mode
-      "s" 'zoho-projects-comment-send
-      "k" 'zoho-projects-comment-abort)))
+      "#" 'zoho-projects-copy-task-key)))

@@ -1366,6 +1366,7 @@ with P."
     (define-key map (kbd "C-c z 3") #'zoho-projects-tab-time-logs)
     (define-key map (kbd "C-c z l") #'zoho-projects-submit-time-log)
     (define-key map (kbd "C-c z c") #'zoho-projects-add-comment)
+    (define-key map (kbd "C-c z C") #'zoho-projects-submit-comment)
     (define-key map (kbd "C-c z t") #'zoho-projects-add-time-entry)
     (define-key map (kbd "C-c z T") #'zoho-projects-start-task-timer)
     (define-key map (kbd "C-c z g") #'zoho-projects-refresh-task)
@@ -1392,17 +1393,20 @@ with P."
 
 (defun zoho-projects--input-field-matcher (limit)
   "Font-lock matcher for the input field backgrounds.
-Matches the next stretch of the Date, Hours/Minutes, Billing or
-notes fields before LIMIT; registered with the `append' override
-so org's own fontification keeps precedence inside the fields."
+Matches the next stretch of the New Comment, Date, Hours/Minutes,
+Billing or notes fields before LIMIT; registered with the `append'
+override so org's own fontification keeps precedence inside the
+fields."
   (let* ((date (zoho-projects--date-field))
          (billing (zoho-projects--billing-field))
          (fields (delq nil
                        ;; Full-line fields take in their newline so the
                        ;; :extend background runs to the window edge;
                        ;; the duration values only paint their digits,
-                       ;; and the notes body ends with its own newline.
-                       (list (and date (cons (car date) (1+ (cdr date))))
+                       ;; and the notes/comment bodies end with their
+                       ;; own newlines.
+                       (list (zoho-projects--comment-field)
+                             (and date (cons (car date) (1+ (cdr date))))
                              (zoho-projects--duration-field 'hours)
                              (zoho-projects--duration-field 'minutes)
                              (and billing
@@ -1484,7 +1488,21 @@ so org's own fontification keeps precedence inside the fields."
       (message "No %s section in this task" heading)))
   (if (fboundp 'org-fold-show-all) (org-fold-show-all) (org-show-all))
   (zoho-projects--fold-time-log-entries)
+  (zoho-projects--fold-default-sections)
   (force-mode-line-update))
+
+(defun zoho-projects--fold-default-sections ()
+  "Collapse the sections that start folded: Details and New Comment.
+Tab switches unfold the whole document, so this runs after each
+one, same as `zoho-projects--fold-time-log-entries'."
+  (save-excursion
+    (dolist (heading '("^\\* Details$" "^\\*\\* New Comment$"))
+      (goto-char (point-min))
+      (when (re-search-forward heading nil t)
+        (beginning-of-line)
+        (if (fboundp 'org-fold-hide-subtree)
+            (org-fold-hide-subtree)
+          (outline-hide-subtree))))))
 
 (defun zoho-projects--fold-time-log-entries ()
   "Collapse every entry under the Time Logs heading.
@@ -1623,9 +1641,13 @@ the entries in once the month fetches answer."
         (insert "* Description\n"
                 (zoho-projects--html-to-org-body description))))
     (insert "* Comments\n")
-    (if (null comments)
-        (insert "  No comments.\n")
-      (mapc #'zoho-projects--insert-comment comments))
+    (insert "** New Comment"
+            ;; Same input-field pattern as the New Time Log notes: an
+            ;; editable body between two marked separator newlines.
+            (propertize "\n" 'zoho-projects-comment-start t)
+            "\n"
+            (propertize "\n" 'zoho-projects-comment-end t))
+    (mapc #'zoho-projects--insert-comment comments)
     (insert "* Time Logs\n"
             ;; The total line doubles as the fetch status: the v1 API
             ;; serves logs per project and month, so the entries arrive
@@ -1704,6 +1726,11 @@ trailing-whitespace highlighting."
   (zoho-projects--marker-field 'zoho-projects-notes-start
                                'zoho-projects-notes-end))
 
+(defun zoho-projects--comment-field ()
+  "Return (START . END) of the New Comment input area, or nil."
+  (zoho-projects--marker-field 'zoho-projects-comment-start
+                               'zoho-projects-comment-end))
+
 (defun zoho-projects--label-line-field (label-prop)
   "Return (START . END) of the editable rest of a labeled input line."
   (save-excursion
@@ -1745,7 +1772,8 @@ UNIT is the symbol `hours' or `minutes'."
 
 (defun zoho-projects--editable-fields ()
   "Return the buffer's editable input field ranges, sorted by position."
-  (sort (delq nil (list (zoho-projects--date-field)
+  (sort (delq nil (list (zoho-projects--comment-field)
+                        (zoho-projects--date-field)
                         (zoho-projects--duration-field 'hours)
                         (zoho-projects--duration-field 'minutes)
                         (zoho-projects--billing-field)
@@ -2178,63 +2206,68 @@ any text typed into the input fields are left alone."
 
 ;;;; Comments
 
-(defvar-local zoho-projects--compose-target nil
-  "List (PROJECT-ID TASK-ID KEY) the comment buffer posts to.")
-
-(defvar zoho-projects-comment-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") #'zoho-projects-comment-send)
-    (define-key map (kbd "C-c C-k") #'zoho-projects-comment-abort)
-    map))
-
-(define-derived-mode zoho-projects-comment-mode text-mode "ZohoTaskComment"
-  "Compose a Zoho Projects task comment.
-\\<zoho-projects-comment-mode-map>Post with \
-\\[zoho-projects-comment-send], abort with \
-\\[zoho-projects-comment-abort].")
-
 (defun zoho-projects-add-comment ()
-  "Compose a comment for the current task."
+  "Jump to this task buffer's New Comment input, ready to type.
+The New Comment entry sits collapsed at the top of the Comments
+section; this unfolds it and puts point in its input field —
+write the comment there and post it with
+`zoho-projects-submit-comment'."
   (interactive)
-  (pcase-let* ((`(,project . ,task)
-                (or (zoho-projects--task-at-point)
-                    (user-error "No task in context")))
-               (key (or (alist-get 'key task) (zoho-projects--id task)))
-               (buf (get-buffer-create (format "*zoho comment %s*" key))))
-    (with-current-buffer buf
-      (zoho-projects-comment-mode)
-      (setq zoho-projects--compose-target
-            (list (zoho-projects--id project) (zoho-projects--id task) key))
-      (erase-buffer))
-    (pop-to-buffer buf)
-    (message "C-c C-c to post the comment, C-c C-k to abort")))
+  (unless zoho-projects--task (user-error "Not in a task buffer"))
+  (let ((field (or (zoho-projects--comment-field)
+                   (user-error "No New Comment section in this buffer"))))
+    ;; The Time Logs tab narrows the field out of view.
+    (unless (and (<= (point-min) (car field)) (>= (point-max) (cdr field)))
+      (zoho-projects--set-tab "Comments")
+      (setq field (zoho-projects--comment-field)))
+    (goto-char (car field))
+    (save-excursion
+      (org-back-to-heading t)
+      (if (fboundp 'org-fold-show-subtree)
+          (org-fold-show-subtree)
+        (outline-show-subtree)))
+    (when (and (fboundp 'evil-insert-state)
+               (bound-and-true-p evil-local-mode))
+      (evil-insert-state))
+    (message "Write the comment, then %s to post it"
+             (substitute-command-keys
+              "\\[zoho-projects-submit-comment]"))))
 
-(defun zoho-projects-comment-send ()
-  "Post the comment in the current compose buffer, in the background."
+(defun zoho-projects-submit-comment ()
+  "Post the New Comment section of this task buffer.
+Sends in the background; on success the task is re-fetched so the
+comment appears in the list and the field resets."
   (interactive)
-  (let ((content (string-trim (buffer-string)))
-        (target zoho-projects--compose-target)
-        (buf (current-buffer)))
+  (unless zoho-projects--task (user-error "Not in a task buffer"))
+  (let* ((field (or (zoho-projects--comment-field)
+                    (user-error "No New Comment section in this buffer")))
+         (content (string-trim (buffer-substring-no-properties
+                                (car field) (cdr field))))
+         (buf (current-buffer))
+         (project zoho-projects--task-project)
+         (task-id (zoho-projects--id zoho-projects--task))
+         (task-key (alist-get 'key zoho-projects--task)))
     (when (string-empty-p content)
-      (user-error "Comment is empty"))
-    (message "Posting comment to %s…" (nth 2 target))
-    (quit-window)
+      (user-error "The comment is empty"))
+    (message "Posting comment to %s…" (or task-key task-id))
     (zoho-projects--request-async
      "POST" (format "/portal/%s/projects/%s/tasks/%s/comments/"
                     (zoho-projects--ensure-portal)
-                    (nth 0 target) (nth 1 target))
+                    (zoho-projects--id project) task-id)
      (lambda (_result err)
        (if err
            (zoho-projects--announce-write-failure "comment" err buf)
-         (message "Comment posted to %s" (nth 2 target))
-         (when (buffer-live-p buf)
-           (kill-buffer buf))))
+         (message "Comment posted to %s" (or task-key task-id))
+         ;; Only if the buffer still shows this task, and without
+         ;; stealing focus — same rules as a posted time log.
+         (when (and (buffer-live-p buf)
+                    (equal (zoho-projects--id
+                            (buffer-local-value 'zoho-projects--task buf))
+                           task-id))
+           (with-current-buffer buf
+             (zoho-projects--show-task project task-id task-key
+                                       zoho-projects--current-tab t)))))
      :payload `(("content" ,content)))))
-
-(defun zoho-projects-comment-abort ()
-  "Abort the comment being composed."
-  (interactive)
-  (kill-buffer))
 
 ;;;; Time logs
 

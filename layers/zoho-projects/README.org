@@ -18,8 +18,12 @@ traffic, posframe-timer time tracking.
   - Quickfind (~SPC a z p f~): helm over a project's tasks, one
     section per status
   - Tasks open as org-mode documents with Overview / Comments /
-    Time Logs tabs; the Details section carries status, owner,
-    dates, duration, work hours and completion
+    Time Logs tabs; the status stands alone at the top as a
+    heading badge (org-modern's TODO-keyword look, colored to
+    match Zoho's status dots — see =zoho-projects-status-colors=),
+    and the
+    Details section — owner, dates, duration, work hours,
+    completion — starts collapsed
   - Incoming HTML (task descriptions, comments) is converted to org
     markup via pandoc, with a plain-text fallback (see
     =zoho-projects-pandoc-program=)
@@ -27,7 +31,9 @@ traffic, posframe-timer time tracking.
     =Fetching …= placeholder that fills in when the API answers;
     posts send while you keep working, and a failed post refocuses
     the buffer with the unsent content and a loud error
-  - Post comments to tasks
+  - Post comments to tasks — a =** New Comment= entry with an
+    input field sits at the top of the Comments tab, same pattern
+    as the New Time Log
   - Post time logs — from a prompt anywhere, or from the task's
     Time Logs tab (a =** New Time Log= entry with input fields for
     Date, Hours/Minutes, Billing and Notes sits at the top)
@@ -134,7 +140,8 @@ Task table (right pane):
 | ~q~   | Close dashboard, restore windows         |
 
 Task document (org buffer, =zoho-projects-task-minor-mode=).  The
-buffer is read-only except the New Time Log input fields; the
+buffer is read-only except the New Comment and New Time Log
+input fields; the
 header-line tabs are clickable.  Commands are on the major-mode
 leader (~,~ or ~SPC m~) as well as =C-c z=:
 
@@ -145,7 +152,8 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, l~      | ~C-c z l~    | Post the New Time Log section          |
 | ~, .~      | ~C-c .~      | Org date picker for the Date field     |
 |            | ~M-n~ / ~M-p~ | Next / previous input field           |
-| ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
+| ~, c~      | ~C-c z c~    | Jump to the New Comment input          |
+| ~, C~      | ~C-c z C~    | Post the New Comment section           |
 | ~, t~      | ~C-c z t~    | Add time log                           |
 | ~, T~      | ~C-c z T~    | Start the task timer on this task      |
 | ~, w~      | ~C-c z w~    | Copy org heading with the task's ids   |
@@ -153,6 +161,13 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, #~      | ~C-c z #~    | Copy the task key (=AR1-T1= form)      |
 | ~, b~      | ~C-c z o~    | Open in browser                        |
 | ~, r~      | ~C-c z g~    | Refresh task                           |
+
+Comments: the Comments tab starts with a collapsed =** New
+Comment= entry whose input field sits on the
+=zoho-projects-input= background.  ~, c~ (or ~C-c z c~) unfolds
+it and puts point in the field (~M-n~ / ~M-p~ also cycle to it);
+~, C~ (or ~C-c z C~) posts it in the background and refreshes the
+task so the comment appears in the list.
 
 Time logs: the Time Logs tab lists the task's logs as org
 subheadings — date, duration, owner, time period, bill status and
