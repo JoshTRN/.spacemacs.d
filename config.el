@@ -257,6 +257,16 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
  vterm-timer-delay 0.01
  )
 
+;; `dotspacemacs-auto-resume-layouts' is already nil, but `SPC q r'
+;; restarts Emacs with --resume-layouts, which overrides it and loads the
+;; persp autosave -- resurrecting transient buffers (agent-shell sessions,
+;; acp stderr logs) as empty fundamental-mode corpses.  Kill layout
+;; persistence outright: never save state, never resume it.  This runs
+;; before persp-mode activates (Spacemacs defers activation until after
+;; user-config), so it also neutralizes a forced resume.
+(setq persp-auto-resume-time -1.0
+      persp-auto-save-opt 0)
+
 (spacemacs/declare-prefix "oi" "Insert")
 (spacemacs/set-leader-keys "oh" #'host-config-file)
 (spacemacs/set-leader-keys "oih" #'insert-comment-heading)
