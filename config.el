@@ -127,7 +127,7 @@ so output that merely contains a fenced block still gets wrapped."
   "Fence language for ACP-UPDATE's tool output, or nil.
 The completed update carries no file path, so the tool call is looked
 up by id in the shell buffers' state (the initial tool_call notification
-stored its rawInput there).  The language is the file's major mode per
+stored its rawInput or title there).  The language is the file's major mode per
 `auto-mode-alist' minus the -mode suffix, mirroring how the renderer
 resolves it back (`agent-shell-markdown--resolve-lang-mode')."
   (when-let* ((tool-call-id (map-elt acp-update 'toolCallId))
@@ -136,7 +136,16 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
                         (map-nested-elt tool-call '(:raw-input path))
                         (map-nested-elt tool-call '(:raw-input notebook_path))
                         (map-nested-elt (seq-first (map-elt tool-call :locations))
-                                        '(path))))
+                                        '(path))
+                        ;; Codex sends locations on the initial tool_call,
+                        ;; which some agent-shell versions do not retain.
+                        ;; Its single-file read title also contains the path.
+                        (let ((title (map-elt tool-call :title)))
+                          (when (and (equal (map-elt tool-call :kind) "read")
+                                     (stringp title)
+                                     (string-match
+                                      "\\`Read file '\\(.+\\)'\\'" title))
+                            (match-string 1 title)))))
               (mode (assoc-default path auto-mode-alist #'string-match)))
     (when (consp mode)                  ; (mode . rest) entries
       (setq mode (car mode)))
