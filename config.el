@@ -181,7 +181,7 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
             (position 0))
         (while (string-match "`+" output position)
           (setq length (max length (1+ (- (match-end 0)
-                                         (match-beginning 0))))
+                                          (match-beginning 0))))
                 position (match-end 0)))
         (let ((fence (make-string length ?`))
               (language (or (agent-shell-fence-output-language (car args))
@@ -206,7 +206,7 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
   (unless my-agent-shell-fonts-configured
     ;; Keep prose in Open Sans even when a host overrides variable-pitch.
     (face-remap-add-relative 'variable-pitch
-                            '(:family "Open Sans" :height 140))
+                             '(:family "Open Sans" :height 140))
     (dolist (face '(agent-shell-markdown-inline-code
                     agent-shell-markdown-source-block
                     agent-shell-markdown-source-block-language
@@ -922,29 +922,29 @@ but reset any face remapping applied elsewhere."
 
 ;; --- emacs-lsp-booster integration ---
 
-(defun lsp-booster--advice-json-parse (old-fn &rest args)
-  "Parse LSP booster bytecode if present, otherwise use regular JSON parser."
-  (or (when (equal (following-char) ?#)
-        (let ((bc (read (current-buffer))))
-          (when (byte-code-function-p bc)
-            (funcall bc))))
-      (apply old-fn args)))
+;; (defun lsp-booster--advice-json-parse (old-fn &rest args)
+;;   "Parse LSP booster bytecode if present, otherwise use regular JSON parser."
+;;   (or (when (equal (following-char) ?#)
+;;         (let ((bc (read (current-buffer))))
+;;           (when (byte-code-function-p bc)
+;;             (funcall bc))))
+;;       (apply old-fn args)))
 
-(advice-add (if (fboundp 'json-parse-buffer)
-                'json-parse-buffer
-              'json-read)
-            :around #'lsp-booster--advice-json-parse)
+;; (advice-add (if (fboundp 'json-parse-buffer)
+;;                 'json-parse-buffer
+;;               'json-read)
+;;             :around #'lsp-booster--advice-json-parse)
 
 
-(defun lsp-booster--advice-final-command (old-fn cmd &optional test?)
-  "Wrap LSP server command with emacs-lsp-booster if available."
-  (let ((orig (funcall old-fn cmd test?)))
-    (if (and (not test?)
-             (executable-find "emacs-lsp-booster"))
-        (cons "emacs-lsp-booster" orig)
-      orig)))
+;; (defun lsp-booster--advice-final-command (old-fn cmd &optional test?)
+;;   "Wrap LSP server command with emacs-lsp-booster if available."
+;;   (let ((orig (funcall old-fn cmd test?)))
+;;     (if (and (not test?)
+;;              (executable-find "emacs-lsp-booster"))
+;;         (cons "emacs-lsp-booster" orig)
+;;       orig)))
 
-(advice-add 'lsp-resolve-final-command :around #'lsp-booster--advice-final-command)
+;; (advice-add 'lsp-resolve-final-command :around #'lsp-booster--advice-final-command)
 
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -991,17 +991,17 @@ If `solaire-default-face` is available, use its background; otherwise use the de
   (custom-set-faces
    `(org-modern-label
      ((t (:family "Helvetica"
-          :height ,(face-attribute 'default :height nil 'default) :width normal :weight bold :underline nil
-          :box (:line-width 1 :color "#07273B")))))
+                  :height ,(face-attribute 'default :height nil 'default) :width normal :weight bold :underline nil
+                  :box (:line-width 1 :color "#07273B")))))
    '(org-modern-todo
      ((t (:inherit org-modern-label
-          :foreground "#D77070" :background "#3A2020"
-          :inverse-video nil
-          :box (:line-width 1 :color "#D77070")))))
+                   :foreground "#D77070" :background "#3A2020"
+                   :inverse-video nil
+                   :box (:line-width 1 :color "#D77070")))))
    '(org-modern-done
      ((t (:inherit org-modern-label
-          :foreground "#5FAF5F" :background "#1F3A1F"
-          :box (:line-width 1 :color "#5FAF5F")))))
+                   :foreground "#5FAF5F" :background "#1F3A1F"
+                   :box (:line-width 1 :color "#5FAF5F")))))
    ;; Progress segments use the status colors and typography, without
    ;; drawing a separate status-label border around each segment.
    '(org-modern-progress-complete
@@ -1010,14 +1010,14 @@ If `solaire-default-face` is available, use its background; otherwise use the de
      ((t (:inherit org-modern-todo :box nil))))
    '(org-modern-in-progress
      ((t (:inherit org-modern-label
-          :foreground "#D4AA00" :background "#3A2F00"
-          :box (:line-width 1 :color "#D4AA00")))))
+                   :foreground "#D4AA00" :background "#3A2F00"
+                   :box (:line-width 1 :color "#D4AA00")))))
    '(org-modern-priority
      ((t (:inherit default))))
    '(org-modern-tag
      ((t (:family "Helvetica" :weight semibold :height 0.9
-          :foreground "#33878F" :background "#0D2224"
-          :box (:line-width 1 :color "#33878F")))))
+                  :foreground "#33878F" :background "#0D2224"
+                  :box (:line-width 1 :color "#33878F")))))
    '(org-special-keyword ((t (:inherit org-headline-done)))))
   ;; This is a variable containing keyword overrides, not a face.
   (setf (alist-get "IN PROGRESS" org-modern-todo-faces nil nil #'equal)
@@ -1075,7 +1075,7 @@ outright; prepending over its result keeps the chip colors."
     (let* ((theme-spec  (face-spec-set face nil 'theme))
            (custom-spec (face-spec-set face nil 'custom)))
       (org-modern-log "%s: theme=%S custom=%S"
-                             face theme-spec custom-spec)
+                      face theme-spec custom-spec)
       (or theme-spec custom-spec)))
 
   (org-modern-log "--- Checking org-modern date/time fallback logic ---")
