@@ -433,11 +433,54 @@ to ~/.authinfo), replacing any previous refresh-token line."
 (defvar zoho-desk--session-cookie nil
   "Minimal agent-console cookie string, or nil until captured.")
 
+(defconst zoho-desk--browser-user-agent
+  (concat "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+  "The composer servlet rejects requests without a browser UA.")
+
 (defun zoho-desk--current-session-cookie ()
   "Return the session cookie, loading it from auth-source if needed."
   (or zoho-desk--session-cookie
       (setq zoho-desk--session-cookie
             (zoho-desk--secret "session-cookie"))))
+
+(defun zoho-desk--ticket-portal-base (ticket)
+  "Return TICKET's (BASE . PORTAL) pair, or nil when underivable.
+BASE is the https://<host> origin and PORTAL the portal slug,
+both taken from the customer-portal webUrl the API returns."
+  (when-let* ((web (alist-get 'webUrl ticket)))
+    (when (string-match
+           "\\`\\(https://[^/]+\\)/\\(?:support\\|portal\\)/\\([^/]+\\)/" web)
+      (cons (match-string 1 web) (match-string 2 web)))))
+
+(defun zoho-desk--session-cookie-live-p (cookie base portal)
+  "Probe whether COOKIE is a live agent-console session.
+GETs BASE/agent/PORTAL without following redirects: a signed-in
+agent session is served directly, while a dead or help-center-only
+session (the customer-portal view sets cookies too, but the
+composer servlet refuses them) 302s to the login page, and a
+malformed one gets a 4xx.  Only those definite signatures count as
+dead — network trouble or an unfamiliar response never rejects a
+cookie the servlet might accept."
+  (let* ((url-request-method "GET")
+         (url-user-agent zoho-desk--browser-user-agent)
+         (url-max-redirections 0)
+         (url-request-extra-headers
+          `(("Cookie" . ,(encode-coding-string cookie 'utf-8))))
+         (buf (url-retrieve-synchronously (format "%s/agent/%s" base portal)
+                                          t t zoho-desk-request-timeout)))
+    (if (not buf)
+        t
+      (with-current-buffer buf
+        (prog1
+            (not (or (and (numberp url-http-response-status)
+                          (>= url-http-response-status 400))
+                     (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward
+                        "^Location: .*\\(?:login\\.sas\\|accounts\\.zoho\\)"
+                        (or url-http-end-of-headers (point-max)) t))))
+          (kill-buffer))))))
 
 (defun zoho-desk--session-cookie-parse (header)
   "Extract the two needed cookies from a pasted Cookie HEADER.
@@ -473,40 +516,62 @@ missing from the paste."
     (auth-source-forget-all-cached)))
 
 (defun zoho-desk--refresh-session-cookie-flow (ticket)
-  "Open TICKET in the browser, then prompt for a fresh Cookie header.
+  "Open TICKET's agent console in the browser, then prompt for a Cookie header.
 Returns the minimal cookie string, now current and persisted.
 Quitting the prompt (C-g / ESC) returns nil — callers must then
-leave the reply alone.  A paste without the needed cookies aborts
-with an explanatory error."
-  (when-let* ((url (and ticket
-                        (or (zoho-desk--agent-ticket-url ticket)
-                            (alist-get 'webUrl ticket)))))
-    (browse-url url))
-  (let ((input (condition-case nil
-                   (read-string
-                    (concat "Zoho session cookie refresh — in the browser: "
-                            "F12 → Network → click any support request → "
-                            "Request Headers → copy the whole Cookie line: "))
-                 (quit nil))))
-    (when input
-      (let ((cookie (zoho-desk--session-cookie-parse input)))
-        (unless cookie
-          (user-error (concat "Zoho Desk: that paste has no __Secure-iamsdt"
-                              " + crmcsr — copy the full Cookie request"
-                              " header from the Network pane")))
-        (setq zoho-desk--session-cookie cookie)
-        (zoho-desk--persist-session-cookie cookie)
-        cookie))))
+leave the reply alone.  A paste without the needed cookies, or one
+whose session is not actually signed in to the agent console (a
+fresh browser lands on the customer-portal view, whose cookies the
+composer servlet refuses), aborts with an explanatory error."
+  (let ((base-portal (zoho-desk--ticket-portal-base ticket)))
+    (when-let* ((url (and ticket
+                          (or (zoho-desk--agent-ticket-url ticket)
+                              (and base-portal
+                                   (format "%s/agent/%s"
+                                           (car base-portal) (cdr base-portal)))
+                              (alist-get 'webUrl ticket)))))
+      (browse-url url))
+    (let ((input (condition-case nil
+                     (read-string
+                      (concat "Zoho session cookie refresh — in the browser: "
+                              "SIGN IN to the /agent/ console if it isn't "
+                              "already (a fresh browser shows the customer "
+                              "portal — that session won't do), reload, then "
+                              "F12 → Network → click a fresh support-host "
+                              "request → Request Headers → copy the whole "
+                              "Cookie line: "))
+                   (quit nil))))
+      (when input
+        (let ((cookie (zoho-desk--session-cookie-parse input)))
+          (unless cookie
+            (user-error (concat "Zoho Desk: that paste has no __Secure-iamsdt"
+                                " + crmcsr — copy the full Cookie request"
+                                " header from the Network pane")))
+          (when (and base-portal
+                     (not (zoho-desk--session-cookie-live-p
+                           cookie (car base-portal) (cdr base-portal))))
+            (user-error (concat "Zoho Desk: that session is not signed in to"
+                                " the agent console — open %s/agent/%s, sign"
+                                " in, reload, and copy the Cookie line from a"
+                                " fresh request")
+                        (car base-portal) (cdr base-portal)))
+          (setq zoho-desk--session-cookie cookie)
+          (zoho-desk--persist-session-cookie cookie)
+          cookie)))))
 
 ;;;###autoload
 (defun zoho-desk-refresh-session-cookie ()
   "Capture a fresh agent-console session cookie for inline images.
-Opens the current ticket in the browser first (so you are on a
-logged-in page), then prompts for the browser's Cookie request
-header: DevTools (F12) → Network tab → click any request to the
-support host → Request Headers → copy the whole \"Cookie:\" line.
-The needed parts (__Secure-iamsdt and crmcsr) are extracted and
-persisted to authinfo."
+Opens the current ticket's agent console in the browser, then
+prompts for the browser's Cookie request header.  In the browser:
+make sure the /agent/ console is actually signed in — a fresh
+browser session lands on the customer-portal view, whose cookies
+the composer servlet refuses — then DevTools (F12) → Network tab →
+click a fresh request to the support host → Request Headers → copy
+the whole \"Cookie:\" line.  The needed parts (__Secure-iamsdt and
+crmcsr) are extracted, checked against the agent console (a
+signed-out paste is rejected on the spot), and persisted to
+authinfo."
   (interactive)
   (if (zoho-desk--refresh-session-cookie-flow
        (or zoho-desk--ticket (ignore-errors (zoho-desk--ticket-at-point))))
@@ -1377,23 +1442,17 @@ The API's webUrl field carries the customer-portal form
 \(<host>/support/<portal>/ShowHomePage.do#...); the agent console
 lives at <host>/agent/<portal>/<department>/tickets/details/<id>,
 with the department's sanitizedName as the URL slug."
-  (when-let* ((web (alist-get 'webUrl ticket))
+  (when-let* ((base-portal (zoho-desk--ticket-portal-base ticket))
               (id (alist-get 'id ticket))
-              (dept-id (alist-get 'departmentId ticket)))
-    (when (string-match
-           "\\`\\(https://[^/]+\\)/\\(?:support\\|portal\\)/\\([^/]+\\)/" web)
-      ;; Grab the matches before `zoho-desk--ensure-departments' can
-      ;; clobber the match data with its own regexp work.
-      (let ((base (match-string 1 web))
-            (portal (match-string 2 web)))
-        (when-let* ((dept (seq-find
-                           (lambda (d)
-                             (equal (format "%s" (alist-get 'id d))
-                                    (format "%s" dept-id)))
-                           (zoho-desk--ensure-departments)))
-                    (slug (alist-get 'sanitizedName dept)))
-          (format "%s/agent/%s/%s/tickets/details/%s"
-                  base portal slug id))))))
+              (dept-id (alist-get 'departmentId ticket))
+              (dept (seq-find
+                     (lambda (d)
+                       (equal (format "%s" (alist-get 'id d))
+                              (format "%s" dept-id)))
+                     (zoho-desk--ensure-departments)))
+              (slug (alist-get 'sanitizedName dept)))
+    (format "%s/agent/%s/%s/tickets/details/%s"
+            (car base-portal) (cdr base-portal) slug id)))
 
 (defun zoho-desk-copy-ticket-number ()
   "Copy the ticket number at point (the \"#ART-364\" form)."
@@ -2878,11 +2937,6 @@ payload, which attaches the file to that reply's thread."
           (push file files))))
     (delete-dups (nreverse files))))
 
-(defconst zoho-desk--browser-user-agent
-  (concat "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
-  "The composer servlet rejects requests without a browser UA.")
-
 (defun zoho-desk--image-content-type (file)
   "MIME type for image FILE, from its extension."
   (pcase (downcase (or (file-name-extension file) ""))
@@ -2898,14 +2952,10 @@ whose blockId Zoho's mailer converts into a real cid inline image
 at send time.  COOKIE is the minimal session cookie.  Returns the
 URL, or nil when the servlet refuses — in practice a stale
 session cookie."
-  (let* ((web (or (alist-get 'webUrl ticket)
-                  (user-error "Zoho Desk: ticket has no web URL")))
-         (base-portal
-          (if (string-match
-               "\\`\\(https://[^/]+\\)/\\(?:support\\|portal\\)/\\([^/]+\\)/"
-               web)
-              (cons (match-string 1 web) (match-string 2 web))
-            (user-error "Zoho Desk: cannot derive the portal from %s" web)))
+  (let* ((base-portal
+          (or (zoho-desk--ticket-portal-base ticket)
+              (user-error "Zoho Desk: cannot derive the portal from %S"
+                          (alist-get 'webUrl ticket))))
          (base (car base-portal))
          (portal (cdr base-portal))
          (csrf (or (and (string-match "crmcsr=\\([^;]+\\)" cookie)

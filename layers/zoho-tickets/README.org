@@ -234,16 +234,21 @@ on; when nil, images fall back to regular attachments with
 Inline sending needs the browser's agent-console session cookie —
 the composer servlet has no OAuth equivalent. When the cookie is
 missing or expired, the send is *refused* (nothing goes out, the
-reply stays put): the ticket opens in your browser and the
-minibuffer prompts for a refresh. In the browser: =F12= → Network
-tab → click any request to the support host → Request Headers →
-copy the whole =Cookie:= line and paste it at the prompt. The two
-needed cookies (=__Secure-iamsdt= — HttpOnly, hence DevTools —
-and =crmcsr=) are extracted and saved to authinfo; sessions last
-days-to-weeks, so this is rare. Quitting the prompt just aborts
-the send with a reminder. ~, i k~ (or ~C-c z k~,
-=zoho-desk-refresh-session-cookie=) runs the same refresh
-proactively.
+reply stays put): the ticket's agent console opens in your browser
+and the minibuffer prompts for a refresh. In the browser, first
+make sure the =/agent/= console is actually *signed in* — a fresh
+browser session lands on the customer-portal ticket view instead,
+and its visitor cookies look plausible but the servlet refuses
+them — then reload and =F12= → Network tab → click a fresh request
+to the support host → Request Headers → copy the whole =Cookie:=
+line and paste it at the prompt. The two needed cookies
+(=__Secure-iamsdt= — HttpOnly, hence DevTools — and =crmcsr=) are
+extracted, probed against the agent console (a signed-out paste is
+rejected at the prompt rather than failing later at upload), and
+saved to authinfo; sessions last days-to-weeks, so this is rare.
+Quitting the prompt just aborts the send with a reminder. ~, i k~
+(or ~C-c z k~, =zoho-desk-refresh-session-cookie=) runs the same
+refresh proactively.
 
 Images that are already in the ticket need none of that: an
 incoming email's inline images display in the thread as
