@@ -77,6 +77,7 @@ Each entry is either:
                zoho-desk-quickfind
                zoho-desk-authorize
                zoho-desk-add-time-entry
+               zoho-desk-set-status
                zoho-desk-log-time-from-org
                zoho-desk-start-ticket-timer
                zoho-desk-finish-ticket-timer
@@ -90,6 +91,7 @@ Each entry is either:
       "aztf" 'zoho-desk-quickfind
       "azta" 'zoho-desk-authorize
       "aztt" 'zoho-desk-add-time-entry
+      "azts" 'zoho-desk-set-status
       "aztl" 'zoho-desk-log-time-from-org
       "azti" 'zoho-desk-start-ticket-timer
       "azto" 'zoho-desk-finish-ticket-timer
@@ -109,6 +111,7 @@ Each entry is either:
       "p" 'zoho-desk-previous-page
       "t" 'zoho-desk-add-time-entry
       "T" 'zoho-desk-start-ticket-timer
+      "u" 'zoho-desk-set-status
       "w" 'zoho-desk-copy-org-snippet
       "y" 'zoho-desk-copy-ticket-url
       "#" 'zoho-desk-copy-ticket-number
@@ -133,6 +136,7 @@ Each entry is either:
       "c" 'zoho-desk-add-comment
       "t" 'zoho-desk-add-time-entry
       "T" 'zoho-desk-start-ticket-timer
+      "u" 'zoho-desk-set-status
       "r" 'zoho-desk-refresh-ticket
       "b" 'zoho-desk-browse-ticket
       "w" 'zoho-desk-copy-org-snippet

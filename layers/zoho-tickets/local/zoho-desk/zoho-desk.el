@@ -1210,6 +1210,7 @@ Falls back to the first starred view, then the first view."
     (define-key map (kbd "g") #'zoho-desk-refresh-table)
     (define-key map (kbd "t") #'zoho-desk-add-time-entry)
     (define-key map (kbd "T") #'zoho-desk-start-ticket-timer)
+    (define-key map (kbd "u") #'zoho-desk-set-status)
     (define-key map (kbd "w") #'zoho-desk-copy-org-snippet)
     (define-key map (kbd "o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "]") #'zoho-desk-next-page)
@@ -1725,6 +1726,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z c") #'zoho-desk-add-comment)
     (define-key map (kbd "C-c z t") #'zoho-desk-add-time-entry)
     (define-key map (kbd "C-c z T") #'zoho-desk-start-ticket-timer)
+    (define-key map (kbd "C-c z u") #'zoho-desk-set-status)
     (define-key map (kbd "C-c z g") #'zoho-desk-refresh-ticket)
     (define-key map (kbd "C-c z o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "C-c z w") #'zoho-desk-copy-org-snippet)
@@ -3295,6 +3297,77 @@ once the post succeeds, and is brought back should it fail."
   (interactive)
   (kill-buffer))
 
+;;;; Ticket status
+
+(defvar zoho-desk--ticket-statuses nil
+  "Cached status picklist of the tickets module, in layout order.")
+
+(defun zoho-desk--ensure-ticket-statuses ()
+  "Return the valid ticket status names, fetching them once per session.
+The picklist is the `allowedValues' of the tickets module's
+status field (GET /organizationFields) — the same list the web
+UI's status dropdown offers."
+  (or zoho-desk--ticket-statuses
+      (setq zoho-desk--ticket-statuses
+            (let* ((fields (alist-get 'data
+                                      (zoho-desk--request
+                                       "GET" "/organizationFields"
+                                       :params '(("module" "tickets")))))
+                   (status (seq-find
+                            (lambda (field)
+                              (equal (alist-get 'apiName field) "status"))
+                            fields)))
+              (or (mapcar (lambda (choice) (alist-get 'value choice))
+                          (alist-get 'allowedValues status))
+                  (error "Zoho Desk: no status picklist in the tickets module"))))))
+
+;;;###autoload
+(defun zoho-desk-set-status (ticket-id status &optional buf)
+  "Set TICKET-ID's status to STATUS, in the background.
+Interactively, the ticket is taken from the list line or ticket
+buffer at point (falling back to a prompt) and STATUS is
+completed from the status field's picklist, fetched from the API
+once per session.  On success the ticket buffer or table the
+update was issued from refreshes to show the new status."
+  (interactive
+   (let ((ticket (zoho-desk--ticket-at-point)))
+     (list (if ticket
+               (alist-get 'id ticket)
+             (read-string "Ticket id: "))
+           (completing-read (format "Status%s: "
+                                    (if-let* ((current (alist-get 'status
+                                                                  ticket)))
+                                        (format " (now %s)" current)
+                                      ""))
+                            (zoho-desk--ensure-ticket-statuses) nil t)
+           (current-buffer))))
+  (message "Setting ticket %s to %s…" ticket-id status)
+  (zoho-desk--request-async
+   "PATCH" (format "/tickets/%s" ticket-id)
+   (lambda (result err)
+     (if err
+         (zoho-desk--announce-write-failure
+          (format "status update on ticket %s" ticket-id) err)
+       (message "Ticket %s is now %s"
+                (if-let* ((number (alist-get 'ticketNumber result)))
+                    (format "#%s" number)
+                  ticket-id)
+                (or (alist-get 'status result) status))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf
+           (cond
+            ;; Same rules as after a sent time log: refresh only if
+            ;; the buffer still shows this ticket, without stealing
+            ;; focus.
+            ((equal (alist-get 'id zoho-desk--ticket) ticket-id)
+             (zoho-desk--show-ticket ticket-id
+                                     (alist-get 'ticketNumber
+                                                zoho-desk--ticket)
+                                     zoho-desk--current-tab t))
+            ((derived-mode-p 'zoho-desk-tickets-mode)
+             (zoho-desk--refresh-table)))))))
+   :payload `(("status" . ,status))))
+
 ;;;; Time entries
 
 (defun zoho-desk--format-duration (hours minutes seconds)
@@ -3584,6 +3657,7 @@ description field ready for `zoho-desk-submit-time-log'."
     (kbd "g r") #'zoho-desk-refresh-table
     (kbd "t") #'zoho-desk-add-time-entry
     (kbd "T") #'zoho-desk-start-ticket-timer
+    (kbd "u") #'zoho-desk-set-status
     (kbd "w") #'zoho-desk-copy-org-snippet
     (kbd "o") #'zoho-desk-browse-ticket
     (kbd "]") #'zoho-desk-next-page

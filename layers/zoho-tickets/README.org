@@ -124,6 +124,7 @@ tickets on ~SPC a z t~ (the =zoho-projects= layer sits next door on
 | ~SPC a z t f~ | Quickfind: full ticket number jumps, else helm fuzzy find |
 | ~SPC a z t a~ | One-time OAuth grant-code exchange         |
 | ~SPC a z t t~ | Add a time entry to a ticket               |
+| ~SPC a z t s~ | Set a ticket's status (picklist from the API) |
 | ~SPC a z t l~ | Log org-clocked time of the entry at point |
 | ~SPC a z t i~ | Start the ticket timer (needs a ticket at point) |
 | ~SPC a z t o~ | Finish the ticket timer → fill its New Time Log |
@@ -147,6 +148,7 @@ Ticket table (right pane):
 | ~]~ / ~[~ | Next / previous page             |
 | ~t~   | Add time entry to ticket at point    |
 | ~T~   | Start the ticket timer on ticket at point |
+| ~u~   | Set the status of ticket at point    |
 | ~w~   | Copy org heading with ZOHO_TICKET_ID |
 | ~o~   | Open ticket in browser               |
 | ~s~   | Collapse/reopen the views sidebar    |
@@ -169,6 +171,7 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
 | ~, t~      | ~C-c z t~    | Add time entry                           |
 | ~, T~      | ~C-c z T~    | Start the ticket timer on this ticket    |
+| ~, u~      | ~C-c z u~    | Set the ticket's status                  |
 | ~, w~      | ~C-c z w~    | Copy org heading with ZOHO_TICKET_ID     |
 | ~, y~      | ~C-c z y~    | Copy agent-console ticket URL            |
 | ~, #~      | ~C-c z #~    | Copy ticket number (=#ART-364= form)     |
@@ -322,5 +325,8 @@ Endpoints used (base =https://desk.zoho.com/api/v1=, headers
 - =POST /tickets/{id}/comments= — ={"content": ..., "isPublic": ...}=
 - =POST /tickets/{id}/timeEntry= — ={"hoursSpent", "minutesSpent",
   "secondsSpent", "executedTime", "description"}=
+- =GET /organizationFields?module=tickets= — the =status= field's
+  =allowedValues= is the status picklist (fetched once per session)
+- =PATCH /tickets/{id}= — ={"status": ...}= to set a ticket's status
 
 Full reference: https://desk.zoho.com/DeskAPIDocument
