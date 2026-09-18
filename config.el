@@ -771,12 +771,29 @@ but reset any face remapping applied elsewhere."
     "mp4" "mkv" "avi" "webm" "mov" "flv" "wmv" "mpg" "mpeg" "m4v" "ts" "3gp" "vob")
   "File extensions that dired opens in VLC instead of Emacs.")
 
+(defun vlc-mpeg-ts-file-p (file)
+  "Return non-nil if FILE's bytes are an MPEG transport stream.
+TypeScript shares the .ts extension; a transport stream is
+packetized into 188-byte cells that each begin with the sync byte
+0x47, so check the first three packet boundaries."
+  (ignore-errors
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally file nil 0 377)
+      (and (> (buffer-size) 376)
+           (eq (char-after 1) #x47)
+           (eq (char-after 189) #x47)
+           (eq (char-after 377) #x47)))))
+
 (defun vlc-media-file-p (file)
   "Return non-nil if FILE is an audio/video file VLC should handle."
   (and (stringp file)
        (file-regular-p file)
-       (member (downcase (or (file-name-extension file) ""))
-               dired-vlc-media-extensions)))
+       (let ((ext (downcase (or (file-name-extension file) ""))))
+         (and (member ext dired-vlc-media-extensions)
+              ;; .ts is also TypeScript — only bytes decide.
+              (or (not (equal ext "ts"))
+                  (vlc-mpeg-ts-file-p file))))))
 
 (defun vlc-open-file (file)
   "Launch VLC on FILE without tying it to Emacs."
