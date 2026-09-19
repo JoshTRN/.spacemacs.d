@@ -226,6 +226,20 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
                 agent-shell-viewport-edit-mode-hook))
   (add-hook hook #'my-agent-shell-variable-pitch))
 
+;; Every agent banner but Codex's inherits fixed-pitch, which the remap
+;; above covers.  Codex's is faced with a bare font-lock-doc-face, so
+;; variable-pitch-mode garbles its circle — and the face itself cannot
+;; be remapped wholesale, since the section-annotation and
+;; viewport-prompt faces inherit it for prose.
+(defun agent-shell-codex-banner-fixed-pitch (art)
+  "Return the Codex banner ART re-faced so it aligns in fixed pitch."
+  (propertize art 'font-lock-face
+              '(:inherit (font-lock-doc-face fixed-pitch))))
+
+(with-eval-after-load 'agent-shell-openai
+  (advice-add 'agent-shell-openai--codex-ascii-art
+              :filter-return #'agent-shell-codex-banner-fixed-pitch))
+
 ;; Also update existing buffers when this configuration is reloaded.
 (dolist (buffer (buffer-list))
   (with-current-buffer buffer
