@@ -28,7 +28,9 @@
 ;;; Code:
 
 (defconst agent-shell-packages
-  '(agent-shell)
+  '(agent-shell
+    (agent-shell-dashboard :location (recipe :fetcher github
+                                             :repo "wandersoncferreira/agent-shell-dashboard")))
   "The list of Lisp packages required by the agent-shell layer.")
 
 (defun agent-shell/init-agent-shell ()
@@ -82,3 +84,36 @@
         (dolist (state '(normal motion))
           (evil-local-set-key state (kbd "?") #'agent-shell-help-menu))))
     (add-hook 'agent-shell-mode-hook #'agent-shell-help-menu-local-keys)))
+
+(defun agent-shell/init-agent-shell-dashboard ()
+  (use-package agent-shell-dashboard
+    :commands (agent-shell-dashboard)
+    :init
+    (spacemacs/set-leader-keys "aad" 'agent-shell-dashboard)
+    ;; The dashboard is a special-mode buffer driven entirely by its own
+    ;; single-key map (c, g, f, K, ...); emacs state keeps evil's normal
+    ;; state from shadowing it.
+    (with-eval-after-load 'evil
+      (evil-set-initial-state 'agent-shell-dashboard-mode 'emacs))
+    :config
+    ;; The transcript header already names the agent that ran a session
+    ;; (the config's :mode-line-name, e.g. "Claude"), so resuming from
+    ;; the dashboard shouldn't pop the "Resume with agent:" picker.
+    (defun agent-shell-dashboard-resume-with-recorded-agent (session)
+      "Resume SESSION with the agent recorded in its transcript header.
+Falls back to the prompting default when no known config matches."
+      (let* ((agent (plist-get session :agent))
+             (config (and agent
+                          (seq-find
+                           (lambda (c)
+                             (member agent (list (map-elt c :mode-line-name)
+                                                 (map-elt c :buffer-name))))
+                           (agent-shell--resolved-agent-configs)))))
+        (if config
+            (let ((default-directory (or (plist-get session :cwd)
+                                         default-directory)))
+              (agent-shell-start :config config
+                                 :session-id (plist-get session :id)))
+          (agent-shell-dashboard--resume-recent-default session))))
+    (setq agent-shell-dashboard-resume-recent-function
+          #'agent-shell-dashboard-resume-with-recorded-agent)))

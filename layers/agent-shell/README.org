@@ -5,6 +5,12 @@ ACP coding agents (Claude Code, Codex, Gemini, ...) inside Emacs via
 the =agent-shell= package.  The layer owns the package and puts the
 common entry points on the applications prefix.
 
+Also ships =agent-shell-dashboard= (GitHub-only, installed via a layer
+recipe): a read-only landing page listing every agent session with a
+triage queue and quick actions.  Its buffer starts in emacs state so
+the package's single-key bindings (~c~, ~g~, ~f~, ~K~, ~?~ ...) work
+untouched by evil.
+
 Buffer-level styling (fenced tool output with language detection,
 variable-pitch prose) lives in =config.el= under the AGENT-SHELL
 heading, not here — it advises package internals and is easier to
@@ -32,5 +38,6 @@ Add =agent-shell= to =dotspacemacs-configuration-layers= (via
 | ~SPC a a s~   | Take a screenshot and send it                      |
 | ~SPC a a r~   | Send the active region                             |
 | ~SPC a a f~   | Send the current file                              |
+| ~SPC a a d~   | Open the sessions dashboard                        |
 
 Agent-specific starters are bound in the host-local config.
