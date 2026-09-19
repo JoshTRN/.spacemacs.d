@@ -1818,12 +1818,13 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
 (defun zoho-desk--input-field-matcher (limit)
   "Font-lock matcher for the input field backgrounds.
 Matches the next stretch of the To address, reply body, Executed
-time, duration values or time log description before LIMIT.
+or End time, duration values or time log description before LIMIT.
 Registered with the `append' override, so faces org has already
 applied — src block and quote backgrounds included — keep
 precedence over the field background."
   (let* ((to (zoho-desk--reply-to-field))
          (executed (zoho-desk--time-executed-field))
+         (end (zoho-desk--time-end-field))
          (fields (delq nil
                        ;; The full-line fields take in their line's
                        ;; newline so the `:extend' background runs to
@@ -1835,6 +1836,7 @@ precedence over the field background."
                              (zoho-desk--reply-body-field)
                              (and executed
                                   (cons (car executed) (1+ (cdr executed))))
+                             (and end (cons (car end) (1+ (cdr end))))
                              (zoho-desk--duration-field 'hours)
                              (zoho-desk--duration-field 'minutes)
                              (zoho-desk--duration-field 'seconds)
@@ -2083,6 +2085,17 @@ the body holds the full description and billing details."
                  (format "%s" (or (alist-get 'hoursSpent entry) 0))))
          (minutes (string-to-number
                    (format "%s" (or (alist-get 'minutesSpent entry) 0))))
+         (seconds (string-to-number
+                   (format "%s" (or (alist-get 'secondsSpent entry) 0))))
+         ;; The API stores only the start (executedTime) and the
+         ;; duration; the interval's end is computed for display.
+         (end (when-let* ((iso (alist-get 'executedTime entry))
+                          ((stringp iso))
+                          ((not (string-empty-p iso)))
+                          (total (+ (* 3600 hours) (* 60 minutes) seconds))
+                          ((cl-plusp total)))
+                (format-time-string "–%H:%M"
+                                    (time-add (date-to-time iso) total))))
          (description (alist-get 'description entry))
          (html (and (stringp description)
                     (string-match-p "<[a-zA-Z!/]" description)))
@@ -2093,10 +2106,11 @@ the body holds the full description and billing details."
          (summary (car (split-string text "\n" t "[ \t]+")))
          (owner (and (alist-get 'owner entry)
                      (zoho-desk--person-name (alist-get 'owner entry)))))
-    (insert (format "** %s (%dh %02dm)%s%s\n"
+    (insert (format "** %s%s (%dh %02dm)%s%s\n"
                     (zoho-desk--org-timestamp
                      (or (alist-get 'executedTime entry)
                          (alist-get 'createdTime entry)))
+                    (or end "")
                     hours minutes
                     (if owner (concat " " owner) "")
                     (if summary
@@ -2216,6 +2230,16 @@ the body holds the full description and billing details."
                         'rear-nonsticky t)
             (format-time-string "[%Y-%m-%d %a %H:%M]")
             "\n"
+            ;; The End line starts blank: filled (by hand or by the
+            ;; ticket timer), it dates the entry's Executed..End
+            ;; interval and the duration is computed from it instead
+            ;; of the Hours / Minutes / Seconds values.
+            (propertize "End: "
+                        'zoho-desk-end-label t
+                        'read-only t
+                        'front-sticky '(read-only)
+                        'rear-nonsticky t)
+            "\n"
             ;; Each duration value starts as editable spaces so the
             ;; input face paints a visible box even while it's blank;
             ;; the spaces are trimmed away on submit.
@@ -2281,6 +2305,7 @@ separator newlines at render time; nil when either is missing."
   (sort (delq nil (list (zoho-desk--reply-to-field)
                         (zoho-desk--reply-body-field)
                         (zoho-desk--time-executed-field)
+                        (zoho-desk--time-end-field)
                         (zoho-desk--duration-field 'hours)
                         (zoho-desk--duration-field 'minutes)
                         (zoho-desk--duration-field 'seconds)
@@ -2290,7 +2315,7 @@ separator newlines at render time; nil when either is missing."
 (defun zoho-desk--protect-buffer ()
   "Make everything except the input fields read-only.
 Only the Reply section's To address and body and the New Time
-Log's Executed time, duration values and description stay
+Log's Executed / End times, duration values and description stay
 editable; the separators around them are locked so the layout
 survives any edit."
   (let ((inhibit-read-only t))
@@ -2746,6 +2771,10 @@ label; the field runs from the label's end to the end of line."
   "Return (START . END) of the Executed line's editable area, or nil."
   (zoho-desk--label-line-field 'zoho-desk-executed-label))
 
+(defun zoho-desk--time-end-field ()
+  "Return (START . END) of the End line's editable area, or nil."
+  (zoho-desk--label-line-field 'zoho-desk-end-label))
+
 (defun zoho-desk--duration-field (unit)
   "Return (START . END) of the duration UNIT's editable value, or nil.
 UNIT is one of the symbols `hours', `minutes' or `seconds'; its
@@ -2781,17 +2810,31 @@ empty value is a zero-width range."
           (t (user-error "%s must be a whole number, not %S"
                          (capitalize (symbol-name unit)) text)))))
 
-(defun zoho-desk--time-executed-value ()
-  "Return the Executed field's time as an Emacs time value.
-nil when the field is blank (meaning: now); a `user-error' when
-its content is not a readable org timestamp."
-  (when-let* ((field (zoho-desk--time-executed-field)))
+(defun zoho-desk--field-time-value (field what)
+  "Return FIELD's content as an Emacs time value, nil when blank.
+FIELD is a (START . END) range or nil; WHAT names the field in the
+`user-error' raised when its content is not a readable org
+timestamp."
+  (when field
     (let ((text (string-trim (buffer-substring-no-properties
                               (car field) (cdr field)))))
       (unless (string-empty-p text)
         (condition-case nil
             (org-time-string-to-time text)
-          (error (user-error "Unreadable Executed time: %s" text)))))))
+          (error (user-error "Unreadable %s time: %s" what text)))))))
+
+(defun zoho-desk--time-executed-value ()
+  "Return the Executed field's time as an Emacs time value.
+nil when the field is blank (meaning: now); a `user-error' when
+its content is not a readable org timestamp."
+  (zoho-desk--field-time-value (zoho-desk--time-executed-field) "Executed"))
+
+(defun zoho-desk--time-end-value ()
+  "Return the End field's time as an Emacs time value.
+nil when the field is blank (meaning: the duration comes from the
+Hours / Minutes / Seconds values); a `user-error' when its content
+is not a readable org timestamp."
+  (zoho-desk--field-time-value (zoho-desk--time-end-field) "End"))
 
 (defun zoho-desk--set-field (field text)
   "Replace the editable FIELD's content with TEXT.
@@ -3467,23 +3510,41 @@ success CALLBACK, when given, is called with no arguments."
     (zoho-desk--set-field field
                           (format-time-string "[%Y-%m-%d %a %H:%M]" time))))
 
-(defun zoho-desk-org-timestamp-dwim ()
-  "Pick the Executed time when point is in its field, else org's C-c .."
+(defun zoho-desk-pick-end-time ()
+  "Fill the New Time Log's End field with the org date picker."
   (interactive)
-  (let ((field (zoho-desk--time-executed-field)))
-    (if (and field (<= (car field) (point)) (>= (cdr field) (point)))
-        (zoho-desk-pick-executed-time)
-      (call-interactively (if (fboundp 'org-timestamp)
-                              'org-timestamp
-                            'org-time-stamp)))))
+  (let ((field (or (zoho-desk--time-end-field)
+                   (user-error "No New Time Log section in this buffer")))
+        (time (org-read-date t t nil "End time: ")))
+    (zoho-desk--set-field field
+                          (format-time-string "[%Y-%m-%d %a %H:%M]" time))))
+
+(defun zoho-desk-org-timestamp-dwim ()
+  "Pick the Executed or End time when point is in either field,
+else org's C-c .."
+  (interactive)
+  (let ((executed (zoho-desk--time-executed-field))
+        (end (zoho-desk--time-end-field)))
+    (cond
+     ((and executed (<= (car executed) (point)) (>= (cdr executed) (point)))
+      (zoho-desk-pick-executed-time))
+     ((and end (<= (car end) (point)) (>= (cdr end) (point)))
+      (zoho-desk-pick-end-time))
+     (t (call-interactively (if (fboundp 'org-timestamp)
+                                'org-timestamp
+                              'org-time-stamp))))))
 
 (defun zoho-desk-submit-time-log ()
   "Post the New Time Log section of this ticket buffer.
-Reads the Executed time, the Hours / Minutes / Seconds duration
-and the description typed below them (the Time Logs tab's
-counterpart of the Reply section) and sends in the background; on
-success the ticket is re-fetched so the new entry appears in the
-Time Logs list and the fields are reset for the next one."
+Reads the Executed time, the entry's duration and the description
+typed below them (the Time Logs tab's counterpart of the Reply
+section) and sends in the background; on success the ticket is
+re-fetched so the new entry appears in the Time Logs list and the
+fields are reset for the next one.
+
+The duration comes from one of two places: an End time, making the
+entry the Executed..End interval, or the Hours / Minutes / Seconds
+values.  Giving both is refused rather than second-guessed."
   (interactive)
   (unless zoho-desk--ticket (user-error "Not in a ticket buffer"))
   (let* ((body (or (zoho-desk--time-body-field)
@@ -3492,15 +3553,28 @@ Time Logs list and the fields are reset for the next one."
                          (zoho-desk--duration-input 'minutes)
                          (zoho-desk--duration-input 'seconds)))
          (executed (zoho-desk--time-executed-value))
+         (end (zoho-desk--time-end-value))
          (description (string-trim (buffer-substring-no-properties
                                     (car body) (cdr body))))
          (buf (current-buffer))
          (ticket-id (alist-get 'id zoho-desk--ticket))
          (ticket-number (alist-get 'ticketNumber zoho-desk--ticket)))
-    (when (zerop (+ (* 3600 (nth 0 duration))
-                    (* 60 (nth 1 duration))
-                    (nth 2 duration)))
-      (user-error "The duration is empty"))
+    (cond
+     ((and end (not executed))
+      (user-error "An End time needs an Executed time to start from"))
+     (end
+      (when (cl-some #'cl-plusp duration)
+        (user-error
+         "Both an End time and a duration are set — clear one of them"))
+      (let ((secs (round (float-time (time-subtract end executed)))))
+        (unless (cl-plusp secs)
+          (user-error "The End time must be after the Executed time"))
+        (setq duration (list (/ secs 3600) (/ (% secs 3600) 60)
+                             (% secs 60)))))
+     ((zerop (+ (* 3600 (nth 0 duration))
+                (* 60 (nth 1 duration))
+                (nth 2 duration)))
+      (user-error "The duration is empty")))
     (zoho-desk--post-time-entry
      ticket-id duration description buf
      (lambda ()
@@ -3555,7 +3629,7 @@ minutes and its heading as description."
 
 (defvar zoho-desk--pending-time-log nil
   "Finished timer waiting to land in a ticket's New Time Log fields.
-A list (TICKET-ID HOURS MINUTES SECONDS START), consumed by
+A list (TICKET-ID START END) of the clocked interval, consumed by
 `zoho-desk--fill-pending-time-log' once a buffer showing TICKET-ID
 is rendered.")
 
@@ -3584,11 +3658,10 @@ describe and submit; discard with `zoho-desk-cancel-ticket-timer'."
 
 ;;;###autoload
 (defun zoho-desk-finish-ticket-timer ()
-  "Stop the ticket timer and open its New Time Log, duration filled in.
+  "Stop the ticket timer and open its New Time Log, interval filled in.
 Callable from anywhere: the ticket buffer pops up on its Time Logs
-tab with Executed set to when the timer started and the Hours /
-Minutes / Seconds fields set to the elapsed time — describe the work
-and submit with `zoho-desk-submit-time-log'."
+tab with Executed and End set to the clocked start and end times —
+describe the work and submit with `zoho-desk-submit-time-log'."
   (interactive)
   (unless zoho-desk--timer-ticket
     (user-error "No ticket timer running"))
@@ -3608,17 +3681,20 @@ and submit with `zoho-desk-submit-time-log'."
 
 (defun zoho-desk--ticket-timer-out (start end _label)
   "Land the clocked interval START..END in the ticket's New Time Log.
-The elapsed time is parked in `zoho-desk--pending-time-log', then
+The interval is parked in `zoho-desk--pending-time-log', then
 the ticket buffer is brought up on its Time Logs tab: filled
 immediately when it already shows the ticket, otherwise once the
 fetch renders it."
   (let* ((ticket zoho-desk--timer-ticket)
          (id (format "%s" (alist-get 'id ticket)))
-         (secs (max 1 (round (float-time (time-subtract end start)))))
          (buf zoho-desk--ticket-buffer))
+    ;; The Executed / End fields hold minute-resolution timestamps, so
+    ;; a clock shorter than a minute is stretched to one: the interval
+    ;; must survive the round trip through the rendered fields.
+    (when (= (floor (float-time start) 60) (floor (float-time end) 60))
+      (setq end (time-add start 60)))
     (setq zoho-desk--timer-ticket nil
-          zoho-desk--pending-time-log
-          (list id (/ secs 3600) (/ (% secs 3600) 60) (% secs 60) start))
+          zoho-desk--pending-time-log (list id start end))
     (if (and (buffer-live-p buf)
              (equal id (format "%s" (alist-get 'id (buffer-local-value
                                                     'zoho-desk--ticket buf)))))
@@ -3633,24 +3709,28 @@ fetch renders it."
                               "Time Logs"))))
 
 (defun zoho-desk--fill-pending-time-log ()
-  "Write the pending timer duration into this buffer's New Time Log.
+  "Write the pending timer interval into this buffer's New Time Log.
 No-op unless `zoho-desk--pending-time-log' targets the ticket shown
 here; the pending entry is consumed, and point lands in the
-description field ready for `zoho-desk-submit-time-log'."
+description field ready for `zoho-desk-submit-time-log'.  The
+clocked start and end land in the Executed and End fields — the
+duration values stay blank (they are the interval's alternative,
+not its echo) and the duration is computed at submit time."
   (when-let* ((pending zoho-desk--pending-time-log)
               ((equal (car pending)
                       (format "%s" (alist-get 'id zoho-desk--ticket)))))
-    (pcase-let ((`(,_id ,hours ,minutes ,seconds ,start) pending))
+    (pcase-let ((`(,_id ,start ,end) pending))
       ;; Each field is looked up fresh because every insertion shifts
-      ;; the positions of the fields after it.
+      ;; the positions of the fields after it.  The duration values
+      ;; are reset to blank editable spaces (the rendered initial
+      ;; state) in case the buffer carried leftovers from hand edits.
       (zoho-desk--set-field (zoho-desk--time-executed-field)
                             (format-time-string "[%Y-%m-%d %a %H:%M]" start))
-      (zoho-desk--set-field (zoho-desk--duration-field 'hours)
-                            (number-to-string hours))
-      (zoho-desk--set-field (zoho-desk--duration-field 'minutes)
-                            (number-to-string minutes))
-      (zoho-desk--set-field (zoho-desk--duration-field 'seconds)
-                            (number-to-string seconds))
+      (zoho-desk--set-field (zoho-desk--time-end-field)
+                            (format-time-string "[%Y-%m-%d %a %H:%M]" end))
+      (zoho-desk--set-field (zoho-desk--duration-field 'hours) "    ")
+      (zoho-desk--set-field (zoho-desk--duration-field 'minutes) "    ")
+      (zoho-desk--set-field (zoho-desk--duration-field 'seconds) "    ")
       (setq zoho-desk--pending-time-log nil)
       (when-let* ((body (zoho-desk--time-body-field)))
         (goto-char (car body))
@@ -3669,9 +3749,14 @@ description field ready for `zoho-desk-submit-time-log'."
         (when (and (fboundp 'evil-insert-state)
                    (bound-and-true-p evil-local-mode))
           (evil-insert-state)))
-      (message "Timer stopped at %s — describe the work and %s to submit"
-               (zoho-desk--format-duration hours minutes seconds)
-               (substitute-command-keys "\\[zoho-desk-submit-time-log]")))))
+      (let ((secs (round (float-time (time-subtract end start)))))
+        (message
+         "Timer stopped: %s–%s (%s) — describe the work and %s to submit"
+         (format-time-string "%H:%M" start)
+         (format-time-string "%H:%M" end)
+         (zoho-desk--format-duration (/ secs 3600) (/ (% secs 3600) 60)
+                                     (% secs 60))
+         (substitute-command-keys "\\[zoho-desk-submit-time-log]"))))))
 
 ;;;; Org snippet
 

@@ -39,8 +39,9 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
   - Send org-clocked time to a ticket via the =ZOHO_TICKET_ID= property
   - Track work live with the posframe timer: ~T~ on a ticket clocks
     in a floating count-up labeled with the ticket number and
-    subject; finishing it from anywhere drops the elapsed time into
-    that ticket's New Time Log fields, ready to describe and submit
+    subject; finishing it from anywhere drops the clocked start and
+    end times into that ticket's New Time Log fields, ready to
+    describe and submit
 
 * Install
 ** Layer
@@ -166,7 +167,7 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, e~      | ~C-c z e~    | Fetch full email body at point           |
 | ~, s~      | ~C-c z s~    | Send the Reply section as email          |
 | ~, l~      | ~C-c z l~    | Post the New Time Log section            |
-| ~, .~      | ~C-c .~      | Org date picker for the Executed field   |
+| ~, .~      | ~C-c .~      | Org date picker for the Executed / End fields |
 |            | ~M-n~ / ~M-p~ | Next / previous input field              |
 | ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
 | ~, t~      | ~C-c z t~    | Add time entry                           |
@@ -267,9 +268,12 @@ The top entry is =** New Time Log=: unfold it and you get the same
 input-field pattern as the Reply section — an =Executed:= line
 prefilled with the current time (~C-c .~ or ~, .~ opens the org
 date picker on it, or edit the timestamp by hand; blank means
-now), a duration line with =Hours:= / =Minutes:= / =Seconds:=
-values (blank counts as 0), and a description field below them,
-all on the =zoho-desk-input= background. ~M-n~ / ~M-p~ cycle
+now), an =End:= line (blank by default; filled, the entry is the
+Executed..End interval and the duration is computed from it), a
+duration line with =Hours:= / =Minutes:= / =Seconds:= values
+(blank counts as 0; the End time's alternative — giving both is
+refused), and a description field below them, all on the
+=zoho-desk-input= background. ~M-n~ / ~M-p~ cycle
 between the input fields (works in normal and insert state; ~TAB~
 keeps its org folding role). ~, l~ (or ~C-c z l~) posts it in the
 background and refreshes the ticket so the new entry appears in
@@ -284,8 +288,10 @@ open other tickets, close the buffer, work anywhere. When done,
 ~SPC a z t o~ (or =posframe-timer='s own clock-out, ~SPC a T o~)
 stops the clock from wherever you are, brings the ticket up on
 its Time Logs tab and fills the New Time Log for you — Executed
-set to when the timer started, Hours / Minutes / Seconds set to
-the elapsed time, point in the description field. Describe the
+and End set to the clocked start and end times (the duration is
+computed from them at submit), point in the description field.
+Zoho Desk stores a time entry as its start plus a duration, so
+the cataloged interval survives in full. Describe the
 work and ~, l~ submits as usual. ~SPC a z t k~ (or ~SPC a T k~)
 discards the timer without logging anything. Requires the
 =posframe-timer= layer.

@@ -36,13 +36,15 @@ traffic, posframe-timer time tracking.
     as the New Time Log
   - Post time logs — from a prompt anywhere, or from the task's
     Time Logs tab (a =** New Time Log= entry with input fields for
-    Date, Hours/Minutes, Billing and Notes sits at the top)
+    Date, Start/End, Hours/Minutes, Billing and Notes sits at the
+    top)
   - Send org-clocked time to a task via the =ZOHO_PROJECT_ID= /
     =ZOHO_TASK_ID= properties
   - Track work live with the posframe timer: ~T~ on a task clocks
     in a floating count-up labeled with the task key and name;
-    finishing it from anywhere drops the elapsed time into that
-    task's New Time Log fields, ready to describe and submit
+    finishing it from anywhere drops the clocked start and end
+    times into that task's New Time Log fields, ready to describe
+    and submit
 
 * Install
 ** Layer
@@ -177,8 +179,14 @@ a notes snippet in the heading.  Entries are *collapsed by
 default* — every tab switch re-folds them — so the tab reads as a
 compact index; ~TAB~ on a heading opens the notes.  The top entry
 is =** New Time Log=: a =Date:= line prefilled with today (~C-c .~
-or ~, .~ opens the org date picker on it), =Hours:= / =Minutes:=
-values (blank counts as 0), a =Billing:= line prefilled from
+or ~, .~ opens the org date picker on it), =Start:= / =End:= clock
+times (blank by default; filled — =14:03= and =2:03 PM= forms both
+work — the log covers that interval: the hours are computed from
+it and the times go to Zoho as the log's =start_time= /
+=end_time=, with End before Start read as crossing midnight),
+=Hours:= / =Minutes:= values (blank counts as 0; the Start / End
+pair's alternative — giving both is refused), a =Billing:= line
+prefilled from
 =zoho-projects-default-bill-status= (=b= / =n= shorthands work),
 and a notes field below them, all on the =zoho-projects-input=
 background.  ~M-n~ / ~M-p~ cycle between the input fields.  ~, l~
@@ -190,8 +198,9 @@ Task timer: ~T~ on a task (table line or open task, also ~, T~ /
 in against it.  When done, ~SPC a z p o~ (or =posframe-timer='s
 own clock-out) stops the clock from wherever you are, brings the
 task up on its Time Logs tab and fills the New Time Log — Date set
-to when the timer started, Hours / Minutes set to the elapsed
-time, point in the notes field.  ~SPC a z p k~ discards the timer
+to when the timer started, Start / End set to the clocked
+interval (submitted to Zoho as the log's =start_time= /
+=end_time=), point in the notes field.  ~SPC a z p k~ discards the timer
 without logging anything.  Requires the =posframe-timer= layer.
 Desk and Projects share the one posframe clock, so only one of
 their timers runs at a time.
@@ -227,7 +236,10 @@ Endpoints used (base =https://projectsapi.zoho.com/restapi=, header
   entries splice into the document when they land
 - =POST .../tasks/{task}/comments/= — form param =content=
 - =POST .../tasks/{task}/logs/= — form params =date= (MM-DD-YYYY),
-  =bill_status= (Billable / Non Billable), =hours= (H:MM), =notes=
+  =bill_status= (Billable / Non Billable), =hours= (H:MM),
+  =start_time= / =end_time= (hh:mm AM/PM, sent when the log covers
+  a Start..End interval; portals without start/end time tracking
+  fall back to =hours=), =notes=
 
 v1 API quirks handled here: writes take form-encoded parameters
 (not JSON bodies), empty collections come back as *204 No Content*,

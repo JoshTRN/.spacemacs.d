@@ -1556,20 +1556,22 @@ sidebar back off the table window at `zoho-projects-sidebar-width'."
 
 (defun zoho-projects--input-field-matcher (limit)
   "Font-lock matcher for the input field backgrounds.
-Matches the next stretch of the New Comment, Date, Hours/Minutes,
-Billing or notes fields before LIMIT; registered with the `append'
-override so org's own fontification keeps precedence inside the
-fields."
+Matches the next stretch of the New Comment, Date, Start/End,
+Hours/Minutes, Billing or notes fields before LIMIT; registered
+with the `append' override so org's own fontification keeps
+precedence inside the fields."
   (let* ((date (zoho-projects--date-field))
          (billing (zoho-projects--billing-field))
          (fields (delq nil
                        ;; Full-line fields take in their newline so the
                        ;; :extend background runs to the window edge;
-                       ;; the duration values only paint their digits,
-                       ;; and the notes/comment bodies end with their
-                       ;; own newlines.
+                       ;; the duration and clock-time values only paint
+                       ;; their digits, and the notes/comment bodies
+                       ;; end with their own newlines.
                        (list (zoho-projects--comment-field)
                              (and date (cons (car date) (1+ (cdr date))))
+                             (zoho-projects--time-bound-field 'start)
+                             (zoho-projects--time-bound-field 'end)
                              (zoho-projects--duration-field 'hours)
                              (zoho-projects--duration-field 'minutes)
                              (and billing
@@ -1920,6 +1922,25 @@ the entries in once the month fetches answer."
                         'rear-nonsticky t)
             (format-time-string "[%Y-%m-%d %a]")
             "\n"
+            ;; The Start / End clock times are the duration line's
+            ;; alternative: filled (by hand or by the task timer),
+            ;; the log covers that interval — the hours are computed
+            ;; from it and the times themselves go to Zoho as the
+            ;; log's start_time / end_time.  Like the duration
+            ;; values, each starts as editable spaces so the input
+            ;; face paints a visible box while blank.
+            (propertize "Start: "
+                        'zoho-projects-time-bound 'start
+                        'read-only t
+                        'front-sticky '(read-only)
+                        'rear-nonsticky t)
+            "      "
+            (propertize "  End: "
+                        'zoho-projects-time-bound 'end
+                        'read-only t
+                        'rear-nonsticky t)
+            "      "
+            "\n"
             ;; Each duration value starts as editable spaces so the
             ;; input face paints a visible box even while it's blank;
             ;; the spaces are trimmed away on submit.
@@ -2021,10 +2042,33 @@ UNIT is the symbol `hours' or `minutes'."
                          (point-max))
                      (line-end-position))))))))
 
+(defun zoho-projects--time-bound-field (which)
+  "Return (START . END) of the WHICH clock time's editable value, or nil.
+WHICH is the symbol `start' or `end'; same label-island mechanics
+as `zoho-projects--duration-field'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (when-let* ((label (text-property-any (point-min) (point-max)
+                                            'zoho-projects-time-bound which))
+                  (start (text-property-not-all label (point-max)
+                                                'zoho-projects-time-bound
+                                                which)))
+        (goto-char start)
+        (cons start
+              (if (get-text-property start 'zoho-projects-time-bound)
+                  start
+                (min (or (next-single-property-change
+                          start 'zoho-projects-time-bound)
+                         (point-max))
+                     (line-end-position))))))))
+
 (defun zoho-projects--editable-fields ()
   "Return the buffer's editable input field ranges, sorted by position."
   (sort (delq nil (list (zoho-projects--comment-field)
                         (zoho-projects--date-field)
+                        (zoho-projects--time-bound-field 'start)
+                        (zoho-projects--time-bound-field 'end)
                         (zoho-projects--duration-field 'hours)
                         (zoho-projects--duration-field 'minutes)
                         (zoho-projects--billing-field)
@@ -2113,6 +2157,46 @@ Same locking rules as zoho-desk's ticket buffers."
           ((string-match-p "\\`[0-9]+\\'" text) (string-to-number text))
           (t (user-error "%s must be a whole number, not %S"
                          (capitalize (symbol-name unit)) text)))))
+
+(defun zoho-projects--parse-clock-time (text what)
+  "Parse TEXT as a clock time, returning minutes since midnight.
+Accepts 24-hour forms (\"14:03\", \"9:05\") and 12-hour forms with
+an AM/PM suffix (\"2:03 PM\", \"02:03pm\").  WHAT names the field
+in the `user-error' raised on anything else."
+  (let ((s (downcase (string-trim text))))
+    (if (string-match
+         "\\`\\([0-9]\\{1,2\\}\\):\\([0-9]\\{2\\}\\)\\(?:[ \t]*\\([ap]\\)\\.?m?\\.?\\)?\\'"
+         s)
+        (let* ((hour (string-to-number (match-string 1 s)))
+               (minute (string-to-number (match-string 2 s)))
+               (meridian (match-string 3 s)))
+          (when (or (> minute 59)
+                    (if meridian (or (< hour 1) (> hour 12)) (> hour 23)))
+            (user-error "%s is not a valid %s time" s what))
+          (when meridian
+            (setq hour (cond ((and (equal meridian "a") (= hour 12)) 0)
+                             ((and (equal meridian "p") (< hour 12))
+                              (+ hour 12))
+                             (t hour))))
+          (+ (* 60 hour) minute))
+      (user-error "%s must be a clock time like 14:03 or 2:03 PM, not %S"
+                  (capitalize what) s))))
+
+(defun zoho-projects--time-bound-value (which)
+  "Return the WHICH clock time field as minutes since midnight.
+WHICH is the symbol `start' or `end'; nil when the field is blank."
+  (let* ((field (or (zoho-projects--time-bound-field which)
+                    (user-error "No New Time Log section in this buffer")))
+         (text (string-trim (buffer-substring-no-properties
+                             (car field) (cdr field)))))
+    (unless (string-empty-p text)
+      (zoho-projects--parse-clock-time text (symbol-name which)))))
+
+(defun zoho-projects--api-clock-time (minutes)
+  "Format MINUTES since midnight as the API's \"hh:mm AM/PM\" form."
+  (let* ((h24 (/ minutes 60))
+         (h12 (let ((h (% h24 12))) (if (zerop h) 12 h))))
+    (format "%02d:%02d %s" h12 (% minutes 60) (if (< h24 12) "AM" "PM"))))
 
 (defun zoho-projects--date-value ()
   "Return the Date field's time as an Emacs time value.
@@ -2528,12 +2612,18 @@ comment appears in the list and the field resets."
 
 (defun zoho-projects--post-time-log (project-id task-id minutes
                                                 &optional date bill notes
-                                                buf callback)
+                                                buf callback start end)
   "POST a time log of MINUTES to TASK-ID of PROJECT-ID.
 DATE is an Emacs time value (nil: today), BILL a bill_status
 string (nil: the default), NOTES the log notes.  On failure BUF,
 when given, is refocused; on success CALLBACK, when given, is
-called with no arguments."
+called with no arguments.
+
+START and END, when both given, are the log's clock times as
+minutes since midnight: they go along as the API's start_time /
+end_time (\"hh:mm AM/PM\") so Zoho catalogs the interval itself,
+not just its length.  MINUTES is still sent as the hours value —
+portals without start/end time tracking fall back to it."
   (let* ((total (max 1 (round minutes)))
          (hours (/ total 60))
          (mins (% total 60))
@@ -2552,16 +2642,25 @@ called with no arguments."
                                              (or date (current-time))))
                 ("bill_status" ,(or bill zoho-projects-default-bill-status))
                 ("hours" ,(format "%d:%02d" hours mins))
+                ,@(when (and start end)
+                    `(("start_time" ,(zoho-projects--api-clock-time start))
+                      ("end_time" ,(zoho-projects--api-clock-time end))))
                 ,@(let ((notes (string-trim (or notes ""))))
                     (unless (string-empty-p notes)
                       `(("notes" ,notes))))))))
 
 (defun zoho-projects-submit-time-log ()
   "Post the New Time Log section of this task buffer.
-Reads the Date, the Hours / Minutes duration, the Billing status
-and the notes typed below them, and sends in the background; on
-success the task is re-fetched so the new entry appears in the
-Time Logs list and the fields are reset for the next one."
+Reads the Date, the log's duration, the Billing status and the
+notes typed below them, and sends in the background; on success
+the task is re-fetched so the new entry appears in the Time Logs
+list and the fields are reset for the next one.
+
+The duration comes from one of two places: the Start / End clock
+times, making the log that interval (both times are sent to Zoho
+alongside the computed hours), or the Hours / Minutes values.
+Giving both is refused rather than second-guessed.  A Start / End
+pair with End before Start is read as crossing midnight."
   (interactive)
   (unless zoho-projects--task (user-error "Not in a task buffer"))
   (let* ((notes-field (or (zoho-projects--notes-field)
@@ -2569,6 +2668,8 @@ Time Logs list and the fields are reset for the next one."
                            "No New Time Log section in this buffer")))
          (minutes (+ (* 60 (zoho-projects--duration-input 'hours))
                      (zoho-projects--duration-input 'minutes)))
+         (start (zoho-projects--time-bound-value 'start))
+         (end (zoho-projects--time-bound-value 'end))
          (date (zoho-projects--date-value))
          (bill (zoho-projects--bill-status-value))
          (notes (string-trim (buffer-substring-no-properties
@@ -2577,8 +2678,20 @@ Time Logs list and the fields are reset for the next one."
          (project zoho-projects--task-project)
          (task-id (zoho-projects--id zoho-projects--task))
          (task-key (alist-get 'key zoho-projects--task)))
-    (when (zerop minutes)
-      (user-error "The duration is empty"))
+    (cond
+     ((and start end)
+      (when (cl-plusp minutes)
+        (user-error
+         "Both Start/End times and a duration are set — clear one of them"))
+      (when (= start end)
+        (user-error "Start and End are the same time"))
+      ;; End before Start wraps to the next day, so a timer that ran
+      ;; across midnight still submits cleanly.
+      (setq minutes (mod (- end start) 1440)))
+     ((or start end)
+      (user-error "Give both a Start and an End time, or neither"))
+     ((zerop minutes)
+      (user-error "The duration is empty")))
     (zoho-projects--post-time-log
      (zoho-projects--id project) task-id minutes date bill notes buf
      (lambda ()
@@ -2590,7 +2703,8 @@ Time Logs list and the fields are reset for the next one."
                          task-id))
          (with-current-buffer buf
            (zoho-projects--show-task project task-id task-key
-                                     zoho-projects--current-tab t)))))))
+                                     zoho-projects--current-tab t))))
+     start end)))
 
 ;;;###autoload
 (defun zoho-projects-add-time-entry (project-id task-id minutes notes)
@@ -2636,7 +2750,7 @@ clocked minutes and its heading as notes."
 
 (defvar zoho-projects--pending-time-log nil
   "Finished timer waiting to land in a task's New Time Log fields.
-A list (TASK-ID HOURS MINUTES START), consumed by
+A list (TASK-ID START END) of the clocked interval, consumed by
 `zoho-projects--fill-pending-time-log' once a buffer showing
 TASK-ID is rendered.")
 
@@ -2667,11 +2781,11 @@ to describe and submit; discard with
 
 ;;;###autoload
 (defun zoho-projects-finish-task-timer ()
-  "Stop the task timer and open its New Time Log, duration filled in.
+  "Stop the task timer and open its New Time Log, interval filled in.
 Callable from anywhere: the task buffer pops up on its Time Logs
-tab with Date set to when the timer started and the Hours /
-Minutes fields set to the elapsed time — describe the work and
-submit with `zoho-projects-submit-time-log'."
+tab with Date set to when the timer started and the Start / End
+fields set to the clocked interval — describe the work and submit
+with `zoho-projects-submit-time-log'."
   (interactive)
   (unless zoho-projects--timer-target
     (user-error "No task timer running"))
@@ -2691,19 +2805,20 @@ submit with `zoho-projects-submit-time-log'."
 
 (defun zoho-projects--task-timer-out (start end _label)
   "Land the clocked interval START..END in the task's New Time Log.
-The elapsed time is parked in `zoho-projects--pending-time-log',
+The interval is parked in `zoho-projects--pending-time-log',
 then the task buffer is brought up on its Time Logs tab: filled
 immediately when it already shows the task, otherwise once the
 fetch renders it."
   (pcase-let* ((`(,project . ,task) zoho-projects--timer-target)
                (id (zoho-projects--id task))
-               (minutes (max 1 (round (/ (float-time
-                                          (time-subtract end start))
-                                         60))))
                (buf zoho-projects--task-buffer))
+    ;; The Start / End fields hold minute-resolution clock times, so
+    ;; a clock shorter than a minute is stretched to one: the
+    ;; interval must survive the round trip through the fields.
+    (when (= (floor (float-time start) 60) (floor (float-time end) 60))
+      (setq end (time-add start 60)))
     (setq zoho-projects--timer-target nil
-          zoho-projects--pending-time-log
-          (list id (/ minutes 60) (% minutes 60) start))
+          zoho-projects--pending-time-log (list id start end))
     (if (and (buffer-live-p buf)
              (equal id (zoho-projects--id
                         (buffer-local-value 'zoho-projects--task buf))))
@@ -2719,22 +2834,31 @@ fetch renders it."
                                 "Time Logs"))))
 
 (defun zoho-projects--fill-pending-time-log ()
-  "Write the pending timer duration into this buffer's New Time Log.
+  "Write the pending timer interval into this buffer's New Time Log.
 No-op unless `zoho-projects--pending-time-log' targets the task
 shown here; the pending entry is consumed, and point lands in the
-notes field ready for `zoho-projects-submit-time-log'."
+notes field ready for `zoho-projects-submit-time-log'.  The
+clocked start and end land in the Start / End fields — the
+duration values stay blank (they are the interval's alternative,
+not its echo) and the hours are computed at submit time."
   (when-let* ((pending zoho-projects--pending-time-log)
               ((equal (car pending)
                       (zoho-projects--id zoho-projects--task))))
-    (pcase-let ((`(,_id ,hours ,minutes ,start) pending))
+    (pcase-let ((`(,_id ,start ,end) pending))
       ;; Each field is looked up fresh because every insertion shifts
-      ;; the positions of the fields after it.
+      ;; the positions of the fields after it.  The duration values
+      ;; are reset to blank editable spaces (the rendered initial
+      ;; state) in case the buffer carried leftovers from hand edits.
       (zoho-projects--set-field (zoho-projects--date-field)
                                 (format-time-string "[%Y-%m-%d %a]" start))
+      (zoho-projects--set-field (zoho-projects--time-bound-field 'start)
+                                (format-time-string "%H:%M" start))
+      (zoho-projects--set-field (zoho-projects--time-bound-field 'end)
+                                (format-time-string "%H:%M" end))
       (zoho-projects--set-field (zoho-projects--duration-field 'hours)
-                                (number-to-string hours))
+                                "    ")
       (zoho-projects--set-field (zoho-projects--duration-field 'minutes)
-                                (number-to-string minutes))
+                                "    ")
       (setq zoho-projects--pending-time-log nil)
       (when-let* ((notes (zoho-projects--notes-field)))
         (goto-char (car notes))
@@ -2750,10 +2874,15 @@ notes field ready for `zoho-projects-submit-time-log'."
         (when (and (fboundp 'evil-insert-state)
                    (bound-and-true-p evil-local-mode))
           (evil-insert-state)))
-      (message "Timer stopped at %s — describe the work and %s to submit"
-               (zoho-projects--format-duration hours minutes)
-               (substitute-command-keys
-                "\\[zoho-projects-submit-time-log]")))))
+      (let ((mins (- (floor (float-time end) 60)
+                     (floor (float-time start) 60))))
+        (message
+         "Timer stopped: %s–%s (%s) — describe the work and %s to submit"
+         (format-time-string "%H:%M" start)
+         (format-time-string "%H:%M" end)
+         (zoho-projects--format-duration (/ mins 60) (% mins 60))
+         (substitute-command-keys
+          "\\[zoho-projects-submit-time-log]"))))))
 
 ;;;; Org snippet
 
