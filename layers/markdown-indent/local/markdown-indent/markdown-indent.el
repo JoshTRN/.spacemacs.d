@@ -207,9 +207,31 @@ sharing the same prefixes are propertized in a single pass."
             (add-text-properties run-beg (point) run-props)))
         (cons beg (point))))))
 
+(declare-function markdown-syntax-propertize-extend-region "markdown-mode")
+
+(defun markdown-indent--extend-region (start end)
+  "Extend START..END to whole markdown blocks, as font-lock does.
+Font-lock widens every region it fontifies to block boundaries
+\(`markdown-syntax-propertize-extend-region'), and jit-lock then
+marks the widened region as fontified even though the other
+jit-lock functions only saw the narrow one (see
+`jit-lock-force-redisplay').  Any part handed only to font-lock —
+the tail of a code block straddling a chunk boundary, say — would
+never get its indent properties, so this mode must cover the same
+widened region.  Returns the extended region as a cons cell."
+  (when (fboundp 'markdown-syntax-propertize-extend-region)
+    (let (res)
+      (while (and (setq res (markdown-syntax-propertize-extend-region
+                             start end))
+                  (or (< (car res) start) (> (cdr res) end)))
+        (setq start (car res)
+              end (cdr res)))))
+  (cons start end))
+
 (defun markdown-indent--jit-lock (start end)
   "Indent the lines between START and END on behalf of `jit-lock'."
-  (let ((bounds (markdown-indent--apply start end)))
+  (let* ((region (markdown-indent--extend-region start end))
+         (bounds (markdown-indent--apply (car region) (cdr region))))
     `(jit-lock-bounds ,(car bounds) . ,(cdr bounds))))
 
 
