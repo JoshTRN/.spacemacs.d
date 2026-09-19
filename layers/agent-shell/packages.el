@@ -47,7 +47,9 @@
                agent-shell-send-clipboard-image-to
                agent-shell-send-screenshot
                agent-shell-send-region
-               agent-shell-send-file)
+               agent-shell-send-file
+               agent-shell-set-session-model
+               agent-shell-set-session-mode)
     :init
     (spacemacs/declare-prefix "aa" "agent-shell")
     (spacemacs/set-leader-keys
@@ -64,4 +66,19 @@
       "aaI" 'agent-shell-send-clipboard-image-to
       "aas" 'agent-shell-send-screenshot
       "aar" 'agent-shell-send-region
-      "aaf" 'agent-shell-send-file)))
+      "aaf" 'agent-shell-send-file
+      "aam" 'agent-shell-set-session-model
+      "aap" 'agent-shell-set-session-mode)
+    :config
+    ;; IDs as advertised by the Claude Code ACP agent under "Available
+    ;; models" / "Available modes" at shell startup.
+    (setq agent-shell-anthropic-default-model-id "claude-fable-5[1m]")
+    (setq agent-shell-anthropic-default-session-mode-id "bypassPermissions")
+    ;; evil's motion-state `?' (evil-search-backward) outranks
+    ;; `agent-shell-mode-map', so bind buffer-locally per state instead.
+    (defun agent-shell-help-menu-local-keys ()
+      "Bind ? to `agent-shell-help-menu' across evil states, buffer-locally."
+      (when (fboundp 'evil-local-set-key)
+        (dolist (state '(normal motion))
+          (evil-local-set-key state (kbd "?") #'agent-shell-help-menu))))
+    (add-hook 'agent-shell-mode-hook #'agent-shell-help-menu-local-keys)))
