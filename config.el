@@ -207,7 +207,10 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
     ;; Keep prose in Open Sans even when a host overrides variable-pitch.
     (face-remap-add-relative 'variable-pitch
                              '(:family "Open Sans" :height 140))
-    (dolist (face '(agent-shell-markdown-inline-code
+    ;; fixed-pitch also covers the ASCII-art welcome banner, which
+    ;; inherits it but otherwise resolves to a mismatched fallback font.
+    (dolist (face '(fixed-pitch
+                    agent-shell-markdown-inline-code
                     agent-shell-markdown-source-block
                     agent-shell-markdown-source-block-language
                     agent-shell-markdown-table
