@@ -13,7 +13,10 @@
 ;;                                are OR-ed: the table shows the union of
 ;;                                their tickets.
 ;; - RET on a ticket              org-mode ticket document with Overview,
-;;                                Thread, Comments and Time Logs tabs
+;;                                Thread, Comments and Time Logs tabs.
+;;                                Comments run newest first under a New
+;;                                Comment field (C-c z m posts it); typing
+;;                                @ there completes an agent mention
 ;; - `zoho-desk-add-time-entry'   post a time entry to a ticket
 ;; - `zoho-desk-log-time-from-org' send org-clocked time to a ticket
 ;; - `zoho-desk-start-ticket-timer' clock the posframe timer in against
@@ -34,7 +37,7 @@
 ;; create one, note the Client ID and Secret, then generate a grant code
 ;; with scopes:
 ;;
-;;   Desk.basic.ALL,Desk.tickets.ALL,Desk.settings.READ,Desk.search.READ,Desk.contacts.READ
+;;   Desk.basic.ALL,Desk.tickets.ALL,Desk.settings.READ,Desk.search.READ,Desk.contacts.READ,Desk.agents.READ
 ;;
 ;; and run M-x zoho-desk-authorize to obtain a refresh token.  Store the
 ;; three secrets in ~/.authinfo.gpg:
@@ -273,6 +276,10 @@ Synced to the modeline accent by `zoho-desk--sync-accent-faces'.")
 Synced to the midpoint of the default and solaire backgrounds by
 `zoho-desk--sync-accent-faces', so the fields read as neither
 plain text nor a code block.")
+
+(defface zoho-desk-mention
+  '((t :inherit zoho-desk-accent))
+  "Face of @agent mentions in comment fields and comment entries.")
 
 (defun zoho-desk--blend-colors (a b)
   "Return the hex color midway between color names A and B.
@@ -584,9 +591,9 @@ authinfo."
 Generate the code at https://api-console.zoho.com under your Self
 Client's \"Generate Code\" tab with scopes
 Desk.basic.ALL,Desk.tickets.ALL,Desk.settings.READ,
-Desk.search.READ,Desk.contacts.READ (as one comma-separated
-line).  Offers to persist the refresh token into authinfo so this
-is a one-time step per Zoho account."
+Desk.search.READ,Desk.contacts.READ,Desk.agents.READ (as one
+comma-separated line).  Offers to persist the refresh token into
+authinfo so this is a one-time step per Zoho account."
   (interactive "sGrant code from Zoho API console: ")
   (let* ((response
           (zoho-desk--token-request
@@ -1783,6 +1790,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z k") #'zoho-desk-refresh-session-cookie)
     (define-key map (kbd "C-c z e") #'zoho-desk-expand-thread-at-point)
     (define-key map (kbd "C-c z c") #'zoho-desk-add-comment)
+    (define-key map (kbd "C-c z m") #'zoho-desk-submit-comment)
     (define-key map (kbd "C-c z t") #'zoho-desk-add-time-entry)
     (define-key map (kbd "C-c z T") #'zoho-desk-start-ticket-timer)
     (define-key map (kbd "C-c z u") #'zoho-desk-set-status)
@@ -1797,6 +1805,9 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "M-n") #'zoho-desk-next-field)
     (define-key map (kbd "M-p") #'zoho-desk-previous-field)
     (define-key map (kbd "C-c .") #'zoho-desk-org-timestamp-dwim)
+    ;; Plain self-insert everywhere except the New Comment field,
+    ;; where @ completes an agent mention.
+    (define-key map (kbd "@") #'zoho-desk-electric-mention)
     map))
 
 (defvar-local zoho-desk--current-tab nil
@@ -1817,8 +1828,9 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
 
 (defun zoho-desk--input-field-matcher (limit)
   "Font-lock matcher for the input field backgrounds.
-Matches the next stretch of the To address, reply body, Executed
-or End time, duration values or time log description before LIMIT.
+Matches the next stretch of the To address, reply body, comment
+body, Executed or End time, duration values or time log
+description before LIMIT.
 Registered with the `append' override, so faces org has already
 applied — src block and quote backgrounds included — keep
 precedence over the field background."
@@ -1834,6 +1846,7 @@ precedence over the field background."
                        ;; before the end separator's.
                        (list (and to (cons (car to) (1+ (cdr to))))
                              (zoho-desk--reply-body-field)
+                             (zoho-desk--comment-body-field)
                              (and executed
                                   (cons (car executed) (1+ (cdr executed))))
                              (and end (cons (car end) (1+ (cdr end))))
@@ -1888,6 +1901,24 @@ badge line hugs the badge."
       (goto-char end)
       t)))
 
+(defun zoho-desk--mention-matcher (limit)
+  "Font-lock matcher for @agent mention spans before LIMIT.
+Matches text carrying the `zoho-desk-mention' property: mentions
+picked in the New Comment field and ones resolved out of fetched
+comments."
+  (let* ((start (if (get-text-property (point) 'zoho-desk-mention)
+                    (point)
+                  (next-single-property-change
+                   (point) 'zoho-desk-mention nil limit)))
+         (end (and start (< start limit)
+                   (get-text-property start 'zoho-desk-mention)
+                   (next-single-property-change
+                    start 'zoho-desk-mention nil limit))))
+    (when end
+      (set-match-data (list start end))
+      (goto-char end)
+      t)))
+
 (defun zoho-desk--badge-background (color)
   "Return COLOR blended into the theme background, mostly background.
 The badge background reads as COLOR at low opacity; nil when the
@@ -1928,6 +1959,7 @@ background."
 
 (defconst zoho-desk--input-font-lock-keywords
   '((zoho-desk--input-field-matcher (0 'zoho-desk-input append))
+    (zoho-desk--mention-matcher (0 'zoho-desk-mention prepend))
     (zoho-desk--status-badge-matcher
      (0 (zoho-desk--status-badge-face) t))
     (zoho-desk--status-badge-star-matcher (0 'default t)))
@@ -2198,19 +2230,33 @@ the body holds the full description and billing details."
       ;; Newest first, matching the Zoho UI; only the newest
       ;; `zoho-desk-thread-prefetch' arrive with full bodies.
       (mapc #'zoho-desk--insert-thread threads))
-    (insert "* Comments\n")
+    (insert "* Comments\n"
+            "** New Comment\n"
+            ;; Same separator pattern as the Reply body: the marked
+            ;; newlines pin the editable field between them.  Type @
+            ;; in the field to mention an agent; C-c z m posts.
+            (propertize "\n" 'zoho-desk-comment-body-start t)
+            "\n"
+            (propertize "\n" 'zoho-desk-comment-body-end t))
     (if (null comments)
         (insert "  No comments.\n")
-      (dolist (comment comments)
+      ;; Newest first, matching the email thread; the API hands them
+      ;; back oldest first.
+      (dolist (comment (seq-sort-by
+                        (lambda (comment)
+                          (or (alist-get 'commentedTime comment) ""))
+                        #'string> (append comments nil)))
         (insert (format "** %s %s\n"
                         (zoho-desk--org-timestamp
                          (alist-get 'commentedTime comment))
                         (zoho-desk--person-name
                          (alist-get 'commenter comment) "unknown")))
         (let ((content (alist-get 'content comment)))
-          (insert (if (equal (alist-get 'contentType comment) "html")
-                      (zoho-desk--html-to-org-body content)
-                    (zoho-desk--org-body content))))))
+          (insert (zoho-desk--resolve-comment-mentions
+                   (if (equal (alist-get 'contentType comment) "html")
+                       (zoho-desk--html-to-org-body content)
+                     (zoho-desk--org-body content))
+                   comment)))))
     (insert "* Time Logs\n"
             "** New Time Log\n"
             ;; Same input-field pattern as the Reply section:
@@ -2300,10 +2346,16 @@ separator newlines at render time; nil when either is missing."
   (zoho-desk--marker-field 'zoho-desk-time-body-start
                            'zoho-desk-time-body-end))
 
+(defun zoho-desk--comment-body-field ()
+  "Return (START . END) of the New Comment area, or nil."
+  (zoho-desk--marker-field 'zoho-desk-comment-body-start
+                           'zoho-desk-comment-body-end))
+
 (defun zoho-desk--editable-fields ()
   "Return the buffer's editable input field ranges, sorted by position."
   (sort (delq nil (list (zoho-desk--reply-to-field)
                         (zoho-desk--reply-body-field)
+                        (zoho-desk--comment-body-field)
                         (zoho-desk--time-executed-field)
                         (zoho-desk--time-end-field)
                         (zoho-desk--duration-field 'hours)
@@ -2314,10 +2366,10 @@ separator newlines at render time; nil when either is missing."
 
 (defun zoho-desk--protect-buffer ()
   "Make everything except the input fields read-only.
-Only the Reply section's To address and body and the New Time
-Log's Executed / End times, duration values and description stay
-editable; the separators around them are locked so the layout
-survives any edit."
+Only the Reply section's To address and body, the New Comment
+body and the New Time Log's Executed / End times, duration values
+and description stay editable; the separators around them are
+locked so the layout survives any edit."
   (let ((inhibit-read-only t))
     (save-excursion
       (save-restriction
@@ -3330,6 +3382,162 @@ image links are embedded and attached."
                             (mapcar (lambda (id) (format "%s" id))
                                     ids))))))))))))
 
+;;;; Agent mentions
+
+(defvar zoho-desk--org-agent-candidates nil
+  "Cached (\"Name <email>\" . ZUID) pairs of the org's agents.
+Fetched once per session for @mention completion; a prefix
+argument on `zoho-desk-electric-mention' re-fetches.  The ZUID
+string is what Zoho's zsu[@user:…]zsu comment markup carries.")
+
+(defun zoho-desk--fetch-org-agent-candidates ()
+  "Fetch every org agent, blocking; return mention candidate pairs.
+The /agents endpoint needs the Desk.agents.READ scope; tokens
+generated without it get a re-authorize hint instead of a raw
+HTTP error."
+  (let ((from 0) (page-size 100) candidates page)
+    (condition-case err
+        (while (progn
+                 (setq page (alist-get
+                             'data
+                             (zoho-desk--request
+                              "GET" "/agents"
+                              :params `(("from" ,from)
+                                        ("limit" ,page-size)))))
+                 (dolist (agent (append page nil))
+                   (when-let* ((zuid (or (alist-get 'zuid agent)
+                                         (alist-get 'id agent))))
+                     (let ((name (zoho-desk--person-name agent))
+                           (email (or (alist-get 'emailId agent)
+                                      (alist-get 'email agent))))
+                       (push (cons (if email
+                                       (format "%s <%s>" name email)
+                                     name)
+                                   (format "%s" zuid))
+                             candidates))))
+                 (setq from (+ from page-size))
+                 (= (length page) page-size)))
+      (error
+       (if (string-match-p "SCOPE_MISMATCH" (error-message-string err))
+           (user-error (concat "Token lacks Desk.agents.READ — generate "
+                               "a grant code with the scopes listed in "
+                               "`zoho-desk-authorize' and run it again"))
+         (signal (car err) (cdr err)))))
+    (nreverse candidates)))
+
+(defun zoho-desk--ensure-agent-candidates (&optional refresh)
+  "Fill the agent mention candidate cache, blocking; REFRESH re-fetches."
+  (when (or refresh (null zoho-desk--org-agent-candidates))
+    (message "Fetching org agents…")
+    (setq zoho-desk--org-agent-candidates
+          (zoho-desk--fetch-org-agent-candidates))
+    (message "Fetching org agents…done (%d agents)"
+             (length zoho-desk--org-agent-candidates))))
+
+(defun zoho-desk--mention-context-p ()
+  "Return non-nil when point is where a comment @mention makes sense:
+anywhere in a comment compose buffer, or inside a ticket buffer's
+New Comment field."
+  (or (derived-mode-p 'zoho-desk-comment-mode)
+      (and (bound-and-true-p zoho-desk-ticket-minor-mode)
+           (when-let* ((field (zoho-desk--comment-body-field)))
+             (and (>= (point) (car field))
+                  (<= (point) (cdr field)))))))
+
+(defun zoho-desk--insert-mention (&optional refresh)
+  "Fuzzy-pick an org agent and insert an @mention at point.
+The inserted name carries the agent's ZUID as a text property, so
+posting can rebuild Zoho's mention markup no matter how the text
+around it is edited.  Free-typed input that matches no agent goes
+in as plain text after the @.  REFRESH re-fetches the agent list."
+  (zoho-desk--ensure-agent-candidates refresh)
+  (let* ((choice (completing-read "Mention agent: "
+                                  zoho-desk--org-agent-candidates))
+         (entry (assoc choice zoho-desk--org-agent-candidates))
+         (name (string-trim (car (split-string (or choice "") "<")))))
+    (when (string-empty-p name)
+      (user-error "No agent picked"))
+    (insert (if entry
+                ;; rear-nonsticky: text typed right after the mention
+                ;; must not inherit the ZUID and grow the tag.
+                (propertize (concat "@" name)
+                            'zoho-desk-mention (cdr entry)
+                            'rear-nonsticky t)
+              (concat "@" name))
+            " ")))
+
+(defun zoho-desk-electric-mention (&optional refresh)
+  "Insert @, completing an agent mention where comments are composed.
+The completion prompt only appears inside the New Comment field
+\(or anywhere in a comment compose buffer) and only at the start
+of a word — @ mid-word, as in an email address, stays plain.
+Quitting the prompt leaves a literal @ too.  A prefix argument
+REFRESH re-fetches the agent list before completing."
+  (interactive "P")
+  (if (and (zoho-desk--mention-context-p)
+           (or (bolp) (memq (char-before) '(?\s ?\t ?\n))))
+      (condition-case nil
+          (zoho-desk--insert-mention refresh)
+        (quit (insert "@")))
+    (self-insert-command 1 ?@)))
+
+(defun zoho-desk--mention-markup-string (start end)
+  "Return the buffer text between START and END with Zoho mention markup.
+Each span carrying a `zoho-desk-mention' ZUID becomes
+\"zsu[@user:ZUID]zsu\", the syntax the comments API expects for
+tagging an agent; everything else is copied verbatim."
+  (let ((chunks nil) (pos start))
+    (while (< pos end)
+      (let ((next (next-single-property-change pos 'zoho-desk-mention
+                                               nil end))
+            (zuid (get-text-property pos 'zoho-desk-mention)))
+        (push (if (stringp zuid)
+                  (format "zsu[@user:%s]zsu" zuid)
+                (buffer-substring-no-properties pos next))
+              chunks)
+        (setq pos next)))
+    (apply #'concat (nreverse chunks))))
+
+(defun zoho-desk--comment-mention-names (comment)
+  "Return a ZUID → display name alist from COMMENT's mention records.
+The records' exact shape is undocumented, so a surprise never
+gets to break the render — it just falls back to the agent cache."
+  (ignore-errors
+    (delq nil
+          (mapcar (lambda (mention)
+                    (when-let* ((zuid (or (alist-get 'zuid mention)
+                                          (alist-get 'id mention))))
+                      (cons (format "%s" zuid)
+                            (or (alist-get 'name mention)
+                                (zoho-desk--person-name mention nil)))))
+                  (append (or (alist-get 'mention comment)
+                              (alist-get 'mentions comment))
+                          nil)))))
+
+(defun zoho-desk--resolve-comment-mentions (text comment)
+  "Replace Zoho's zsu[@user:…]zsu markup in TEXT with @Name.
+Names come from COMMENT's own mention records when the API sends
+them, then from the cached agent list; an id nobody recognizes
+stays visible as @<zuid>.  Resolved mentions keep the ZUID in the
+`zoho-desk-mention' property, which also hands them the mention
+face."
+  (let ((names (zoho-desk--comment-mention-names comment)))
+    (replace-regexp-in-string
+     "zsu\\[@user:\\([0-9]+\\)\\]zsu"
+     (lambda (match)
+       (save-match-data
+         (let* ((zuid (and (string-match ":\\([0-9]+\\)\\]" match)
+                           (match-string 1 match)))
+                (name (or (cdr (assoc zuid names))
+                          (when-let* ((entry (rassoc
+                                              zuid
+                                              zoho-desk--org-agent-candidates)))
+                            (string-trim
+                             (car (split-string (car entry) "<")))))))
+           (propertize (concat "@" (or name zuid "?"))
+                       'zoho-desk-mention (or zuid t)))))
+     text t t)))
+
 ;;;; Comments
 
 (defvar-local zoho-desk--compose-ticket-id nil)
@@ -3338,12 +3546,15 @@ image links are embedded and attached."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'zoho-desk-comment-send)
     (define-key map (kbd "C-c C-k") #'zoho-desk-comment-abort)
+    (define-key map (kbd "@") #'zoho-desk-electric-mention)
     map))
 
 (define-derived-mode zoho-desk-comment-mode text-mode "ZohoComment"
   "Compose a Zoho Desk ticket comment.
 \\<zoho-desk-comment-mode-map>Post with \\[zoho-desk-comment-send], \
-abort with \\[zoho-desk-comment-abort].")
+abort with \\[zoho-desk-comment-abort]; @ completes an agent mention."
+  (font-lock-add-keywords
+   nil '((zoho-desk--mention-matcher (0 'zoho-desk-mention prepend)))))
 
 (defun zoho-desk-add-comment ()
   "Compose a comment for the current ticket."
@@ -3358,32 +3569,79 @@ abort with \\[zoho-desk-comment-abort].")
       (setq zoho-desk--compose-ticket-id (alist-get 'id ticket))
       (erase-buffer))
     (pop-to-buffer buf)
-    (message "C-c C-c to post %s comment, C-c C-k to abort"
+    (message "C-c C-c to post %s comment, C-c C-k to abort, @ mentions"
              (if zoho-desk-comments-public "a PUBLIC" "a private"))))
+
+(defun zoho-desk--refresh-shown-ticket (ticket-id)
+  "Background-refresh the ticket buffer when it still shows TICKET-ID.
+Same rules as after a sent reply: only if the reusable ticket
+buffer is live and on this ticket, keeping its tab, without
+stealing focus."
+  (let ((tbuf (and (buffer-live-p zoho-desk--ticket-buffer)
+                   zoho-desk--ticket-buffer)))
+    (when-let* ((ticket (and tbuf
+                             (buffer-local-value 'zoho-desk--ticket tbuf))))
+      (when (equal (alist-get 'id ticket) ticket-id)
+        (zoho-desk--show-ticket ticket-id
+                                (alist-get 'ticketNumber ticket)
+                                (buffer-local-value
+                                 'zoho-desk--current-tab tbuf)
+                                t)))))
+
+(defun zoho-desk--post-comment (ticket-id content buf on-success)
+  "POST CONTENT as a comment on TICKET-ID, in the background.
+Failure is announced by refocusing BUF, which still holds the
+unsent text; success runs ON-SUCCESS and refreshes the ticket
+buffer when it still shows this ticket, so the comment appears at
+the top of the Comments list."
+  (message "Posting comment to ticket %s…" ticket-id)
+  (zoho-desk--request-async
+   "POST" (format "/tickets/%s/comments" ticket-id)
+   (lambda (_result err)
+     (if err
+         (zoho-desk--announce-write-failure "comment" err buf)
+       (message "Comment posted to ticket %s" ticket-id)
+       (funcall on-success)
+       (zoho-desk--refresh-shown-ticket ticket-id)))
+   :payload `(("content" . ,content)
+              ("isPublic" . ,(if zoho-desk-comments-public t
+                               :json-false)))))
 
 (defun zoho-desk-comment-send ()
   "Post the comment in the current compose buffer, in the background.
 The compose window closes immediately; the buffer is only killed
 once the post succeeds, and is brought back should it fail."
   (interactive)
-  (let ((content (string-trim (buffer-string)))
+  (let ((content (string-trim (zoho-desk--mention-markup-string
+                               (point-min) (point-max))))
         (ticket-id zoho-desk--compose-ticket-id)
         (buf (current-buffer)))
     (when (string-empty-p content)
       (user-error "Comment is empty"))
-    (message "Posting comment to ticket %s…" ticket-id)
     (quit-window)
-    (zoho-desk--request-async
-     "POST" (format "/tickets/%s/comments" ticket-id)
-     (lambda (_result err)
-       (if err
-           (zoho-desk--announce-write-failure "comment" err buf)
-         (message "Comment posted to ticket %s" ticket-id)
-         (when (buffer-live-p buf)
-           (kill-buffer buf))))
-     :payload `(("content" . ,content)
-                ("isPublic" . ,(if zoho-desk-comments-public t
-                                 :json-false))))))
+    (zoho-desk--post-comment
+     ticket-id content buf
+     (lambda ()
+       (when (buffer-live-p buf)
+         (kill-buffer buf))))))
+
+(defun zoho-desk-submit-comment ()
+  "Post the New Comment section of this ticket buffer.
+The comment sends in the background; on success the ticket is
+re-fetched so it appears at the top of the Comments list and the
+field is emptied for the next one.  @mentions picked in the field
+\(type @) notify the tagged agents.  `zoho-desk-comments-public'
+decides whether the contact sees it."
+  (interactive)
+  (unless zoho-desk--ticket (user-error "Not in a ticket buffer"))
+  (let* ((field (or (zoho-desk--comment-body-field)
+                    (user-error "No New Comment section in this buffer")))
+         (content (string-trim (zoho-desk--mention-markup-string
+                                (car field) (cdr field)))))
+    (when (string-empty-p content)
+      (user-error "The New Comment field is empty"))
+    (zoho-desk--post-comment (alist-get 'id zoho-desk--ticket) content
+                             (current-buffer) #'ignore)))
 
 (defun zoho-desk-comment-abort ()
   "Abort the comment being composed."
