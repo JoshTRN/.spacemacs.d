@@ -188,7 +188,19 @@ nil, the address is derived from the latest inbound email thread
   :type '(choice (const nil) string))
 
 (defcustom zoho-desk-signature nil
-  "Plain-text signature appended to outgoing email replies, when non-nil."
+  "Plain-text signature appended to outgoing email replies, when non-nil.
+On HTML sends a non-nil `zoho-desk-signature-html' wins over this."
+  :type '(choice (const nil) string))
+
+(defcustom zoho-desk-signature-html nil
+  "HTML signature appended to outgoing HTML email replies, when non-nil.
+Appended verbatim after the exported reply body, so it can carry
+the full styled markup of a mail-client signature (layout table,
+colors, logo).  <img> tags with a file:// src are uploaded
+through the composer servlet on each send and become true inline
+images, exactly like [[file:...]] images in the reply body.  Only
+used when `zoho-desk-reply-html' is on; plain-text sends use
+`zoho-desk-signature'."
   :type '(choice (const nil) string))
 
 (defcustom zoho-desk-reply-html t
@@ -619,9 +631,14 @@ authinfo so this is a one-time step per Zoho account."
 ;;;; HTTP
 
 (defun zoho-desk--request-url (path params)
-  "Return the full request URL for PATH with query PARAMS, as unibyte."
+  "Return the full request URL for PATH with query PARAMS, as unibyte.
+An absolute https PATH passes through as-is — some image URLs
+(mail ImageDisplay) live outside the API base but accept the same
+OAuth token."
   (encode-coding-string
-   (concat zoho-desk-base-url path
+   (concat (if (string-prefix-p "https://" path)
+               path
+             (concat zoho-desk-base-url path))
            (and params (concat "?" (url-build-query-string params))))
    'utf-8))
 
@@ -984,7 +1001,9 @@ inline styles cannot leak into the org block's header line."
 The newline stays, so the visual line break survives; only inside
 verbatim blocks (example, src, export) are the backslashes left
 alone, since there they are content.  Markup blocks like quote
-and center hold prose, so theirs are stripped too."
+and center hold prose, so theirs are stripped too.  A signature's
+box-drawing rule (see zoho-desk-flatten-tables.lua) also pulls
+itself up against the line above it."
   (with-temp-buffer
     (insert org)
     (goto-char (point-min))
@@ -996,10 +1015,30 @@ and center hold prose, so theirs are stripped too."
          ((looking-at-p "[ \t]*#\\+end_\\(example\\|src\\|export\\)\\_>")
           (setq literal nil))
          ((and (not literal)
+               (looking-at-p "[ \t]*─\\{2,\\}"))
+          ;; After each deletion point is back on the rule line, so
+          ;; the next backward step looks at the new previous line.
+          (save-excursion
+            (while (and (zerop (forward-line -1))
+                        (looking-at-p "[ \t]*$"))
+              (delete-region (point) (progn (forward-line 1) (point)))))
+          (when (re-search-forward "\\\\\\\\$" (line-end-position) t)
+            (replace-match "")))
+         ((and (not literal)
                (re-search-forward "\\\\\\\\$" (line-end-position) t))
           (replace-match "")))
         (forward-line 1)))
     (buffer-string)))
+
+(defconst zoho-desk--pandoc-lua-filter
+  (expand-file-name
+   "zoho-desk-flatten-tables.lua"
+   (file-name-directory (or load-file-name buffer-file-name
+                            default-directory)))
+  "Pandoc Lua filter that flattens mail layout tables.
+Email signatures use <table> purely for layout; as literal org
+tables they are unreadable, so the filter turns them back into
+stacked blocks (see its commentary for the whole cleanup list).")
 
 (defun zoho-desk--html-to-org (html)
   "Convert HTML to org markup via `zoho-desk-pandoc-program'.
@@ -1012,10 +1051,15 @@ missing, or chokes on the input."
              (insert (zoho-desk--wrap-pre-code html))
              (let ((coding-system-for-write 'utf-8)
                    (coding-system-for-read 'utf-8))
-               (when (zerop (call-process-region
+               (when (zerop (apply
+                             #'call-process-region
                              (point-min) (point-max)
                              zoho-desk-pandoc-program t '(t nil) nil
-                             "-f" "html-auto_identifiers" "-t" "org"))
+                             "-f" "html-auto_identifiers" "-t" "org"
+                             (and (file-readable-p
+                                   zoho-desk--pandoc-lua-filter)
+                                  (list "--lua-filter"
+                                        zoho-desk--pandoc-lua-filter))))
                  (zoho-desk--strip-org-linebreaks
                   (buffer-substring-no-properties (point-min)
                                                   (point-max)))))))
@@ -1031,6 +1075,19 @@ Trailing whitespace is stripped and empty lines stay truly empty."
 (defun zoho-desk--html-to-org-body (html)
   "Convert HTML to indented org markup usable as an org entry body."
   (zoho-desk--org-body (zoho-desk--html-to-org html)))
+
+(defun zoho-desk--signature-preview ()
+  "Org approximation of the signature outgoing replies will carry.
+Rendered through the same HTML→org pipeline as incoming mail, so
+it previews `zoho-desk-signature-html' (or the plain
+`zoho-desk-signature') about the way the recipient's reply quote
+will come back.  Empty when no signature applies."
+  (cond
+   ((and zoho-desk-reply-html zoho-desk-signature-html)
+    (zoho-desk--html-to-org-body zoho-desk-signature-html))
+   (zoho-desk-signature
+    (zoho-desk--org-body zoho-desk-signature))
+   (t "")))
 
 (defun zoho-desk--ticket-at-point ()
   "Return the ticket alist relevant to the current buffer/point."
@@ -2224,7 +2281,11 @@ the body holds the full description and billing details."
             ;; so the body always grows in front of it.
             (propertize "\n" 'zoho-desk-body-start t)
             "\n"
-            (propertize "\n" 'zoho-desk-body-end t))
+            (propertize "\n" 'zoho-desk-body-end t)
+            ;; Outside the field markers, so it reads as part of the
+            ;; draft but never joins the sent body — the real
+            ;; signature is appended at send time.
+            (zoho-desk--signature-preview))
     (if (null threads)
         (insert "  No emails yet.\n")
       ;; Newest first, matching the Zoho UI; only the newest
@@ -2559,9 +2620,22 @@ COMMENTS and TIME-ENTRIES are passed through to the render."
   "\\[\\[\\(/api/v1/[^][]*/inlineImages/[^][]+\\)\\]\\]"
   "Org link whose target is an API-relative inline image.")
 
+(defconst zoho-desk--local-image-link-re
+  "\\[\\[file://\\(/[^][]+\\.\\(?:png\\|jpe?g\\|gif\\|webp\\)\\)\\]\\]"
+  "Org link whose target is a local image file.
+The signature preview renders its logo as such a link.")
+
+(defconst zoho-desk--display-url-image-link-re
+  "\\[\\[\\(https://[^][]*/mail/ImageDisplay[^][]+\\)\\]\\]"
+  "Org link whose target is a Zoho mail ImageDisplay URL.
+Zoho rewrites composer-uploaded inline images (our own outgoing
+ones, e.g. the signature logo) to this form when the sent email
+lands back in the thread.")
+
 (defun zoho-desk--inline-image-file (path)
   "Cache file name for the inline image at API PATH."
-  (let ((ext (if (string-match "[?&]f=[^&]*\\.\\([A-Za-z0-9]+\\)\\'" path)
+  (let ((ext (if (string-match "[?&]f=[^&]*\\.\\([A-Za-z0-9]+\\)\\(?:&\\|\\'\\)"
+                 path)
                  (concat "." (downcase (match-string 1 path)))
                "")))
     (expand-file-name (concat (md5 path) ext) zoho-desk--inline-image-dir)))
@@ -2586,6 +2660,9 @@ a re-render erases the buffer."
               (let ((ov (make-overlay (match-beginning 0) (match-end 0))))
                 (overlay-put ov 'zoho-desk-image t)
                 (overlay-put ov 'display image)
+                ;; The org-link face underneath would draw its
+                ;; underline across the image.
+                (overlay-put ov 'face '(:underline nil))
                 (overlay-put ov 'evaporate t)))))))))
 
 (defun zoho-desk--fetch-inline-image (path file)
@@ -2618,12 +2695,31 @@ Cached images show immediately; the rest arrive in the background."
           (widen)
           (goto-char (point-min))
           (while (re-search-forward zoho-desk--inline-image-link-re nil t)
+            (push (match-string-no-properties 1) paths))
+          ;; Sent-back composer images (e.g. the signature logo) --
+          ;; absolute URLs, but the same OAuth fetch works.
+          (goto-char (point-min))
+          (while (re-search-forward zoho-desk--display-url-image-link-re
+                                    nil t)
             (push (match-string-no-properties 1) paths))))
       (dolist (path (delete-dups (nreverse paths)))
         (let ((file (zoho-desk--inline-image-file path)))
           (if (file-exists-p file)
               (zoho-desk--overlay-inline-image path file)
-            (zoho-desk--fetch-inline-image path file)))))))
+            (zoho-desk--fetch-inline-image path file))))
+      ;; Local file links (the signature preview's logo) need no
+      ;; fetch — the link target is the file.
+      (let (files)
+        (save-excursion
+          (save-restriction
+            (widen)
+            (goto-char (point-min))
+            (while (re-search-forward zoho-desk--local-image-link-re nil t)
+              (push (match-string-no-properties 1) files))))
+        (dolist (file (delete-dups (nreverse files)))
+          (when (file-exists-p file)
+            (zoho-desk--overlay-inline-image (concat "file://" file)
+                                             file)))))))
 
 (defun zoho-desk--render-ticket (buf ticket threads comments time-entries tab)
   "Fill BUF with TICKET's org document and select TAB."
@@ -3032,6 +3128,19 @@ payload, which attaches the file to that reply's thread."
           (push file files))))
     (delete-dups (nreverse files))))
 
+(defun zoho-desk--signature-image-files ()
+  "Return existing files behind file:// <img> tags in the HTML signature."
+  (when zoho-desk-signature-html
+    (let ((start 0) files)
+      (while (string-match "<img [^>]*src=\"file://\\([^\"]+\\)\""
+                           zoho-desk-signature-html start)
+        (setq start (match-end 0))
+        (let ((file (expand-file-name
+                     (match-string 1 zoho-desk-signature-html))))
+          (when (file-exists-p file)
+            (push file files))))
+      (delete-dups (nreverse files)))))
+
 (defun zoho-desk--image-content-type (file)
   "MIME type for image FILE, from its extension."
   (pcase (downcase (or (file-name-extension file) ""))
@@ -3200,10 +3309,15 @@ from API sends.  Images already inline in a thread are handled by
 `zoho-desk--rewrite-thread-image-links'.  Single newlines are
 kept as line breaks so the email reads like the compose buffer."
   (require 'ox-html)
-  (let ((html (zoho-desk--email-safe-block-styles
-               (org-export-string-as
-                (zoho-desk--rewrite-thread-image-links org-text)
-                'html t '(:preserve-breaks t)))))
+  (let ((html (concat
+               (zoho-desk--email-safe-block-styles
+                (org-export-string-as
+                 (zoho-desk--rewrite-thread-image-links org-text)
+                 'html t '(:preserve-breaks t)))
+               ;; The signature joins before the image pass below, so
+               ;; its file:// logos get the same inline-URL treatment
+               ;; as body images.
+               zoho-desk-signature-html)))
     (dolist (entry images html)
       (let ((file (car entry))
             (inline-url (cdr entry)))
@@ -3295,7 +3409,11 @@ image links are embedded and attached."
                                zoho-desk--threads))))
     (when (string-empty-p body)
       (user-error "The Reply section is empty"))
-    (when zoho-desk-signature
+    ;; The HTML signature joins during export instead (see
+    ;; `zoho-desk--org-to-html'), so appending the plain one here too
+    ;; would sign the email twice.
+    (when (and zoho-desk-signature
+               (not (and zoho-desk-reply-html zoho-desk-signature-html)))
       (setq body (concat body "\n\n" zoho-desk-signature)))
     (let ((to (or (zoho-desk--reply-to-address)
                   ;; Blank To line: fall back to picking an address.
@@ -3316,7 +3434,10 @@ image links are embedded and attached."
       (let* ((buf (current-buffer))
              (ticket-number (alist-get 'ticketNumber zoho-desk--ticket))
              (image-files (and zoho-desk-reply-html
-                               (zoho-desk--reply-image-files body)))
+                               (delete-dups
+                                (append
+                                 (zoho-desk--reply-image-files body)
+                                 (zoho-desk--signature-image-files)))))
              ;; Inline path: upload through the composer servlet up
              ;; front (may prompt for a session cookie refresh and
              ;; abort the send — nothing has gone out yet).
