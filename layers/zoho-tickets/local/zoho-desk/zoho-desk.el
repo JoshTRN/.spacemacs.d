@@ -443,19 +443,40 @@ to ~/.authinfo), replacing any previous refresh-token line."
 ;; Sending a NEW image truly inline needs the composer's upload
 ;; servlet (ImageUpload.do), which only accepts the browser's session
 ;; cookie — there is no OAuth equivalent (verified by probing; see
-;; README).  Two cookies suffice: __Secure-iamsdt (the IAM session,
-;; HttpOnly so only visible in the DevTools Network pane) and crmcsr
+;; README).  Keep the complete Cookie header: the console may also
+;; need session and routing cookies beyond __Secure-iamsdt and crmcsr
 ;; (the CSRF token, echoed as header and form field).
 
 (defvar zoho-desk--ticket)              ; buffer-local, defined below
 
 (defvar zoho-desk--session-cookie nil
-  "Minimal agent-console cookie string, or nil until captured.")
+  "Complete agent-console cookie string, or nil until captured.")
 
-(defconst zoho-desk--browser-user-agent
-  (concat "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
-  "The composer servlet rejects requests without a browser UA.")
+(defcustom zoho-desk-browser-user-agent nil
+  "Fallback User-Agent for legacy sessions without a captured browser.
+Normally leave nil: cookie refresh captures and saves the User-Agent
+from the same browser request.  Captured values take precedence."
+  :type '(choice (const :tag "Capture during refresh" nil) string)
+  :group 'zoho-desk)
+
+(defvar zoho-desk--session-user-agent nil
+  "User-Agent captured with the current session cookie.")
+
+(defun zoho-desk--current-session-user-agent ()
+  "Return the captured User-Agent, loading it from auth-source if needed."
+  (or zoho-desk--session-user-agent
+      (setq zoho-desk--session-user-agent
+            (zoho-desk--secret "session-user-agent"))
+      zoho-desk-browser-user-agent))
+
+(defun zoho-desk--session-user-agent-parse (header)
+  "Return the value of a pasted User-Agent HEADER, or nil if invalid."
+  (let* ((case-fold-search t)
+         (value (string-trim
+                 (replace-regexp-in-string
+                  "\\`User-Agent:[ \t]*" "" (string-trim (or header ""))))))
+    (unless (or (string-empty-p value) (string-match-p "[\r\n]" value))
+      value)))
 
 (defun zoho-desk--current-session-cookie ()
   "Return the session cookie, loading it from auth-source if needed."
@@ -472,51 +493,38 @@ both taken from the customer-portal webUrl the API returns."
            "\\`\\(https://[^/]+\\)/\\(?:support\\|portal\\)/\\([^/]+\\)/" web)
       (cons (match-string 1 web) (match-string 2 web)))))
 
-(defun zoho-desk--session-cookie-live-p (cookie base portal)
-  "Probe whether COOKIE is a live agent-console session.
-GETs BASE/agent/PORTAL without following redirects: a signed-in
-agent session is served directly, while a dead or help-center-only
-session (the customer-portal view sets cookies too, but the
-composer servlet refuses them) 302s to the login page, and a
-malformed one gets a 4xx.  Only those definite signatures count as
-dead — network trouble or an unfamiliar response never rejects a
-cookie the servlet might accept."
-  (let* ((url-request-method "GET")
-         (url-user-agent zoho-desk--browser-user-agent)
-         (url-max-redirections 0)
-         (url-request-extra-headers
-          `(("Cookie" . ,(encode-coding-string cookie 'utf-8))))
-         (buf (url-retrieve-synchronously (format "%s/agent/%s" base portal)
-                                          t t zoho-desk-request-timeout)))
-    (if (not buf)
-        t
-      (with-current-buffer buf
-        (prog1
-            (not (or (and (numberp url-http-response-status)
-                          (>= url-http-response-status 400))
-                     (save-excursion
-                       (goto-char (point-min))
-                       (re-search-forward
-                        "^Location: .*\\(?:login\\.sas\\|accounts\\.zoho\\)"
-                        (or url-http-end-of-headers (point-max)) t))))
-          (kill-buffer))))))
-
 (defun zoho-desk--session-cookie-parse (header)
-  "Extract the two needed cookies from a pasted Cookie HEADER.
-Returns the minimal cookie string, or nil when either cookie is
-missing from the paste."
-  (let (sdt csr)
-    (dolist (pair (split-string (or header "") ";[ \t]*" t))
-      (when (string-match "\\`\\([^=]+\\)=\\(.*\\)\\'" pair)
-        (let ((name (string-trim (match-string 1 pair)))
-              (value (match-string 2 pair)))
-          (cond ((equal name "__Secure-iamsdt") (setq sdt value))
-                ((equal name "crmcsr") (setq csr value))))))
-    (when (and sdt csr)
-      (format "__Secure-iamsdt=%s;crmcsr=%s" sdt csr))))
+  "Normalize a pasted Cookie HEADER without dropping session cookies.
+Accept either the header value or a full Cookie: line.  Return nil
+for malformed input or missing/empty __Secure-iamsdt or crmcsr."
+  (let* ((case-fold-search t)
+         (value (string-trim (or header "")))
+         (value (string-trim
+                 (replace-regexp-in-string "\\`Cookie:[ \t]*" "" value)))
+         (pairs (split-string value ";[ \t]*" t))
+         (valid (and pairs (not (string-match-p "[\r\n]" value))))
+         sdt csr)
+    (dolist (pair pairs)
+      (if (not (string-match "\\`\\([^=; \t]+\\)=\\(.*\\)\\'" pair))
+          (setq valid nil)
+        (let ((name (match-string 1 pair))
+              (cookie-value (match-string 2 pair)))
+          (cond ((equal name "__Secure-iamsdt")
+                 (setq sdt (not (string-empty-p cookie-value))))
+                ((equal name "crmcsr")
+                 (setq csr (not (string-empty-p cookie-value))))))))
+    (when (and valid sdt csr)
+      (mapconcat #'identity pairs "; "))))
 
-(defun zoho-desk--persist-session-cookie (cookie)
-  "Save COOKIE as the zoho-desk session-cookie authinfo line."
+(defun zoho-desk--authinfo-quote (value)
+  "Quote VALUE using auth-source's netrc syntax, not Lisp escaping."
+  (cond
+   ((not (string-match-p "\"" value)) (concat "\"" value "\""))
+   ((not (string-match-p "'" value)) (concat "'" value "'"))
+   (t (user-error "Zoho Desk: session header contains unsupported mixed quotes"))))
+
+(defun zoho-desk--persist-session-cookie (cookie user-agent)
+  "Save COOKIE and its matching USER-AGENT together in authinfo."
   (let ((file (or (seq-find #'file-exists-p
                             (mapcar #'expand-file-name
                                     (seq-filter #'stringp auth-sources)))
@@ -525,23 +533,25 @@ missing from the paste."
       (when (file-exists-p file)
         (insert-file-contents file))
       (goto-char (point-min))
-      (flush-lines "^machine zoho-desk login session-cookie ")
+      (flush-lines "^machine zoho-desk login session-\\(?:cookie\\|user-agent\\) ")
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
-      (insert (format "machine zoho-desk login session-cookie password \"%s\"\n"
-                      cookie))
+      (insert (format "machine zoho-desk login session-cookie password %s\n"
+                      (zoho-desk--authinfo-quote cookie)))
+      (insert (format "machine zoho-desk login session-user-agent password %s\n"
+                      (zoho-desk--authinfo-quote user-agent)))
       (write-region (point-min) (point-max) file nil 'silent))
     (set-file-modes file #o600)
     (auth-source-forget-all-cached)))
 
 (defun zoho-desk--refresh-session-cookie-flow (ticket)
   "Open TICKET's agent console in the browser, then prompt for a Cookie header.
-Returns the minimal cookie string, now current and persisted.
+Returns the complete cookie string, now current and persisted.
 Quitting the prompt (C-g / ESC) returns nil — callers must then
-leave the reply alone.  A paste without the needed cookies, or one
-whose session is not actually signed in to the agent console (a
-fresh browser lands on the customer-portal view, whose cookies the
-composer servlet refuses), aborts with an explanatory error."
+leave the reply alone.  A malformed paste or one without the needed
+cookies aborts with an explanatory error.  The upload servlet checks
+authentication when an image is uploaded; the console page is not a
+reliable probe of the servlet session."
   (let ((base-portal (zoho-desk--ticket-portal-base ticket)))
     (when-let* ((url (and ticket
                           (or (zoho-desk--agent-ticket-url ticket)
@@ -566,17 +576,19 @@ composer servlet refuses), aborts with an explanatory error."
             (user-error (concat "Zoho Desk: that paste has no __Secure-iamsdt"
                                 " + crmcsr — copy the full Cookie request"
                                 " header from the Network pane")))
-          (when (and base-portal
-                     (not (zoho-desk--session-cookie-live-p
-                           cookie (car base-portal) (cdr base-portal))))
-            (user-error (concat "Zoho Desk: that session is not signed in to"
-                                " the agent console — open %s/agent/%s, sign"
-                                " in, reload, and copy the Cookie line from a"
-                                " fresh request")
-                        (car base-portal) (cdr base-portal)))
-          (setq zoho-desk--session-cookie cookie)
-          (zoho-desk--persist-session-cookie cookie)
-          cookie)))))
+          (let ((input-ua (condition-case nil
+                              (read-string
+                               "From the SAME browser request, copy the User-Agent line: ")
+                            (quit nil))))
+            (when input-ua
+              (let ((user-agent (zoho-desk--session-user-agent-parse input-ua)))
+                (unless user-agent
+                  (user-error "Zoho Desk: paste a nonempty, single-line User-Agent header"))
+                ;; Commit only after both prompts and persistence succeed.
+                (zoho-desk--persist-session-cookie cookie user-agent)
+                (setq zoho-desk--session-cookie cookie
+                      zoho-desk--session-user-agent user-agent)
+                cookie))))))))
 
 ;;;###autoload
 (defun zoho-desk-refresh-session-cookie ()
@@ -587,10 +599,11 @@ make sure the /agent/ console is actually signed in — a fresh
 browser session lands on the customer-portal view, whose cookies
 the composer servlet refuses — then DevTools (F12) → Network tab →
 click a fresh request to the support host → Request Headers → copy
-the whole \"Cookie:\" line.  The needed parts (__Secure-iamsdt and
-crmcsr) are extracted, checked against the agent console (a
-signed-out paste is rejected on the spot), and persisted to
-authinfo."
+the whole \"Cookie:\" line.  The complete header is preserved and
+saved to authinfo after checking for __Secure-iamsdt and crmcsr.
+A second prompt captures the User-Agent from the same request, so
+the session works with whichever browser supplied it.
+Authentication is checked by the servlet when uploading an image."
   (interactive)
   (if (zoho-desk--refresh-session-cookie-flow
        (or zoho-desk--ticket (ignore-errors (zoho-desk--ticket-at-point))))
@@ -3153,7 +3166,7 @@ payload, which attaches the file to that reply's thread."
   "Upload image FILE through TICKET's portal composer servlet.
 The servlet (ImageUpload.do) answers with an ImageDisplay URL
 whose blockId Zoho's mailer converts into a real cid inline image
-at send time.  COOKIE is the minimal session cookie.  Returns the
+at send time.  COOKIE is the complete session cookie.  Returns the
 URL, or nil when the servlet refuses — in practice a stale
 session cookie."
   (let* ((base-portal
@@ -3188,7 +3201,9 @@ session cookie."
          ;; The servlet rejects a non-browser User-Agent.  url.el emits
          ;; its own UA header from `url-user-agent', so set that rather
          ;; than adding a second (duplicate) header via extra-headers.
-         (url-user-agent zoho-desk--browser-user-agent)
+         (url-user-agent
+          (or (zoho-desk--current-session-user-agent)
+              (user-error "Zoho Desk: refresh the session to capture its browser User-Agent")))
          ;; Ask for no gzip; the reply is a short URL and
          ;; `zoho-desk--response-body' does not decompress.
          (url-mime-encoding-string "identity")
@@ -3224,7 +3239,7 @@ the whole send with the reply buffer untouched."
   (let ((cookie (zoho-desk--current-session-cookie))
         (refreshed nil)
         result)
-    (unless cookie
+    (unless (and cookie (zoho-desk--current-session-user-agent))
       (setq cookie (zoho-desk--refresh-session-cookie-flow ticket)
             refreshed t)
       (unless cookie

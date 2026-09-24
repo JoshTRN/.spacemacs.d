@@ -242,14 +242,22 @@ browser session lands on the customer-portal ticket view instead,
 and its visitor cookies look plausible but the servlet refuses
 them — then reload and =F12= → Network tab → click a fresh request
 to the support host → Request Headers → copy the whole =Cookie:=
-line and paste it at the prompt. The two needed cookies
-(=__Secure-iamsdt= — HttpOnly, hence DevTools — and =crmcsr=) are
-extracted, probed against the agent console (a signed-out paste is
-rejected at the prompt rather than failing later at upload), and
-saved to authinfo; sessions last days-to-weeks, so this is rare.
+line and paste it at the prompt. The complete header is saved to
+authinfo after checking that =__Secure-iamsdt= and =crmcsr= are
+present and nonempty. Additional session and routing cookies are
+preserved. Authentication is checked when the composer uploads an
+image; the console page is not a reliable test of upload access.
 Quitting the prompt just aborts the send with a reminder. ~, i k~
 (or ~C-c z k~, =zoho-desk-refresh-session-cookie=) runs the same
 refresh proactively.
+
+Refresh also prompts for the =User-Agent= line from the *same request*.
+The cookie and browser identity are saved together in authinfo and
+restored after restarting Emacs. No browser or platform is hardcoded.
+When switching browsers or after an update changes its User-Agent,
+refresh both values. A cookie-only legacy session prompts for refresh
+before uploading. =zoho-desk-browser-user-agent= is an optional fallback
+for legacy sessions; normally leave it nil.
 
 Images that are already in the ticket need none of that: an
 incoming email's inline images display in the thread as
