@@ -1271,6 +1271,33 @@ outright; prepending over its result keeps the chip colors."
            ("-d" "en_US") nil utf-8))
         ispell-local-dictionary "en_US"))
 
+(setq zoho-desk-signature-html
+      (concat
+       "<div title=\"sign_holder::start\"></div>"
+       "<div style=\"font-family: Arial, Helvetica, sans-serif\">"
+       "<p style=\"font-size: 13.33px\">Best regards,&nbsp;</p>"
+       "<table style=\"width: 243pt; max-width: 100%; border-width: 1.5pt 0 0;"
+       " border-style: solid none none\""
+       " cellpadding=\"0\" cellspacing=\"0\" border=\"0\"><tbody><tr>"
+       "<td style=\"vertical-align: top; width: 91.5pt;"
+       " padding: 7.5pt 0.75pt 0.75pt\">"
+       "<a href=\"https://iqnox.com/\" target=\"_blank\">"
+       "<img src=\"file://"
+       (expand-file-name
+        "layers/zoho-tickets/local/zoho-desk/zoho-desk-signature-logo.png"
+        dotspacemacs-directory)
+       "\"></a></td>"
+       "<td style=\"vertical-align: top; width: 147pt;"
+       " padding: 7.5pt 0.75pt 0.75pt 15pt\">"
+       "<p style=\"margin: 0; line-height: 18pt\">"
+       "<b style=\"font-size: 13.5pt; color: #192e58\">Joshua Wood</b><br>"
+       "<span style=\"font-size: 9pt; color: #192e58\">"
+       "Senior Solutions Engineer</span></p>"
+       "<p style=\"margin: 0; line-height: 18pt; font-size: 10pt\">"
+       "<a href=\"mailto:josh.wood@iqnox.com\">josh.wood@iqnox.com</a></p>"
+       "</td></tr></tbody></table></div>"
+       "<div title=\"sign_holder::end\"></div>"))
+
 ;; Expose a named socket in GUI sessions so they can be inspected with
 ;; `emacsclient -s gui' (the plain "server" socket belongs to the daemon).
 ;; Sitting at the end of config.el, a live socket also proves the whole
