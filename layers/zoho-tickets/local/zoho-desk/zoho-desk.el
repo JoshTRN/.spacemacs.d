@@ -2744,6 +2744,7 @@ Cached images show immediately; the rest arrive in the background."
     (zoho-desk--render-ticket-org ticket threads comments time-entries)
     (setq zoho-desk--ticket ticket
           zoho-desk--threads threads
+          zoho-desk--comment-posting nil
           buffer-offer-save nil)
     (zoho-desk-ticket-minor-mode 1)
     (zoho-desk--sync-accent-faces)
@@ -3708,6 +3709,20 @@ abort with \\[zoho-desk-comment-abort]; @ completes an agent mention."
     (message "C-c C-c to post %s comment, C-c C-k to abort, @ mentions"
              (if zoho-desk-comments-public "a PUBLIC" "a private"))))
 
+(defvar-local zoho-desk--comment-posting nil
+  "Non-nil while this ticket buffer's New Comment field is posting.
+Guards against double-submitting the same comment while the
+background POST is in flight; any re-render clears it.")
+
+(defun zoho-desk--replace-comment-field (text)
+  "Replace the New Comment field's contents with TEXT."
+  (when-let* ((field (zoho-desk--comment-body-field)))
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (delete-region (car field) (cdr field))
+        (goto-char (car field))
+        (insert text)))))
+
 (defun zoho-desk--refresh-shown-ticket (ticket-id)
   "Background-refresh the ticket buffer when it still shows TICKET-ID.
 Same rules as after a sent reply: only if the reusable ticket
@@ -3724,42 +3739,71 @@ stealing focus."
                                  'zoho-desk--current-tab tbuf)
                                 t)))))
 
-(defun zoho-desk--post-comment (ticket-id content buf on-success)
+(defun zoho-desk--comment-html (org-text)
+  "Export a comment's ORG-TEXT to the HTML the comments API stores.
+Zoho keeps comments as HTML no matter how they are posted (a
+plain-text post is stored as html, collapsing its newlines), so
+the org markup is exported like a reply body — quote blocks,
+emphasis and line breaks included — and wrapped in the container
+div the web UI's composer produces.  The zsu[@user:…]zsu mention
+markup must ride through the export verbatim; that is the form
+mentions take inside comments the web UI posts."
+  (require 'ox-html)
+  (concat "<div style=\"direction: ltr; font-size: 13px; "
+          "font-family: Arial, Helvetica, sans-serif\">"
+          (zoho-desk--email-safe-block-styles
+           (org-export-string-as org-text 'html t '(:preserve-breaks t)))
+          "</div>"))
+
+(defun zoho-desk--post-comment (ticket-id content buf on-success
+                                          &optional on-failure)
   "POST CONTENT as a comment on TICKET-ID, in the background.
-Failure is announced by refocusing BUF, which still holds the
-unsent text; success runs ON-SUCCESS and refreshes the ticket
-buffer when it still shows this ticket, so the comment appears at
-the top of the Comments list."
+Failure runs ON-FAILURE (when given) and is announced by
+refocusing BUF, which still holds the unsent text; success runs
+ON-SUCCESS and refreshes the ticket buffer when it still shows
+this ticket, so the comment appears at the top of the Comments
+list."
+  (unless ticket-id
+    (user-error "Zoho Desk: no ticket to comment on"))
   (message "Posting comment to ticket %s…" ticket-id)
   (zoho-desk--request-async
    "POST" (format "/tickets/%s/comments" ticket-id)
    (lambda (_result err)
      (if err
-         (zoho-desk--announce-write-failure "comment" err buf)
+         (progn
+           (when on-failure (funcall on-failure))
+           (zoho-desk--announce-write-failure "comment" err buf))
        (message "Comment posted to ticket %s" ticket-id)
        (funcall on-success)
        (zoho-desk--refresh-shown-ticket ticket-id)))
-   :payload `(("content" . ,content)
+   :payload `(("content" . ,(zoho-desk--comment-html content))
+              ("contentType" . "html")
               ("isPublic" . ,(if zoho-desk-comments-public t
                                :json-false)))))
 
 (defun zoho-desk-comment-send ()
   "Post the comment in the current compose buffer, in the background.
 The compose window closes immediately; the buffer is only killed
-once the post succeeds, and is brought back should it fail."
+once the post succeeds, and is brought back should it fail.
+Called anywhere else (M-x from a ticket document), the comment
+being posted is the ticket's New Comment field, so this defers to
+`zoho-desk-submit-comment' instead of sending the whole buffer to
+a ticket id no compose buffer ever set."
   (interactive)
-  (let ((content (string-trim (zoho-desk--mention-markup-string
-                               (point-min) (point-max))))
-        (ticket-id zoho-desk--compose-ticket-id)
-        (buf (current-buffer)))
-    (when (string-empty-p content)
-      (user-error "Comment is empty"))
-    (quit-window)
-    (zoho-desk--post-comment
-     ticket-id content buf
-     (lambda ()
-       (when (buffer-live-p buf)
-         (kill-buffer buf))))))
+  (if (not (derived-mode-p 'zoho-desk-comment-mode))
+      (zoho-desk-submit-comment)
+    (let ((content (string-trim (zoho-desk--mention-markup-string
+                                 (point-min) (point-max))))
+          (ticket-id zoho-desk--compose-ticket-id)
+          (buf (current-buffer)))
+      (when (string-empty-p content)
+        (user-error "Comment is empty"))
+      (quit-window)
+      (zoho-desk--post-comment
+       ticket-id content buf
+       (lambda ()
+         (when (buffer-live-p buf)
+           (kill-buffer buf)))))))
 
 (defun zoho-desk-submit-comment ()
   "Post the New Comment section of this ticket buffer.
@@ -3770,14 +3814,39 @@ field is emptied for the next one.  @mentions picked in the field
 decides whether the contact sees it."
   (interactive)
   (unless zoho-desk--ticket (user-error "Not in a ticket buffer"))
+  (when zoho-desk--comment-posting
+    (user-error "This comment is already posting — C-c z g to refresh"))
   (let* ((field (or (zoho-desk--comment-body-field)
                     (user-error "No New Comment section in this buffer")))
          (content (string-trim (zoho-desk--mention-markup-string
                                 (car field) (cdr field)))))
     (when (string-empty-p content)
       (user-error "The New Comment field is empty"))
-    (zoho-desk--post-comment (alist-get 'id zoho-desk--ticket) content
-                             (current-buffer) #'ignore)))
+    ;; The field flips to a posting notice the moment the send is on
+    ;; its way: feedback that cannot depend on the network answering,
+    ;; and the guard above stops a second send of the same text.  The
+    ;; success refresh re-renders the field empty; failure puts the
+    ;; snapshot back, mention properties included, ready to retry.
+    (let ((snapshot (buffer-substring (car field) (cdr field)))
+          (buf (current-buffer)))
+      (setq zoho-desk--comment-posting t)
+      (zoho-desk--replace-comment-field
+       (propertize "Posting comment… (C-c z g refreshes)\n"
+                   'face 'shadow
+                   'read-only t
+                   'front-sticky '(read-only)
+                   'rear-nonsticky t))
+      (zoho-desk--post-comment
+       (alist-get 'id zoho-desk--ticket) content buf
+       (lambda ()
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (setq zoho-desk--comment-posting nil))))
+       (lambda ()
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (setq zoho-desk--comment-posting nil)
+             (zoho-desk--replace-comment-field snapshot))))))))
 
 (defun zoho-desk-comment-abort ()
   "Abort the comment being composed."

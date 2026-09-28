@@ -134,6 +134,7 @@ Each entry is either:
       "ie" 'zoho-desk-insert-image
       "ik" 'zoho-desk-refresh-session-cookie
       "c" 'zoho-desk-add-comment
+      "m" 'zoho-desk-submit-comment
       "t" 'zoho-desk-add-time-entry
       "T" 'zoho-desk-start-ticket-timer
       "u" 'zoho-desk-set-status
