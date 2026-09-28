@@ -116,4 +116,29 @@ Falls back to the prompting default when no known config matches."
                                  :session-id (plist-get session :id)))
           (agent-shell-dashboard--resume-recent-default session))))
     (setq agent-shell-dashboard-resume-recent-function
-          #'agent-shell-dashboard-resume-with-recorded-agent)))
+          #'agent-shell-dashboard-resume-with-recorded-agent)
+
+    ;; The recent-sessions scan probes `.agent-shell/transcripts/' under
+    ;; every projectile-known project root; a remote (TRAMP) root makes
+    ;; that probe open an SSH connection (even `expand-file-name' on
+    ;; "/ssh:host:~/" connects, to resolve ~) and hangs the dashboard
+    ;; when the host is unreachable.  Drop remote roots at their three
+    ;; sources before any path is expanded -- `file-remote-p' only
+    ;; parses the name, it never connects.
+    (defun agent-shell-dashboard-skip-remote-roots (orig &rest args)
+      "Call ORIG with remote (TRAMP) project roots filtered out."
+      (let ((projects (symbol-function 'projectile-relevant-known-projects))
+            (cwd (symbol-function 'agent-shell-dashboard--cwd)))
+        (cl-letf (((symbol-function 'projectile-relevant-known-projects)
+                   (lambda () (and projects
+                                   (seq-remove #'file-remote-p
+                                               (funcall projects)))))
+                  ((symbol-function 'agent-shell-dashboard--cwd)
+                   (lambda (b) (let ((d (funcall cwd b)))
+                                 (and d (not (file-remote-p d)) d))))
+                  (default-directory (if (file-remote-p default-directory)
+                                         temporary-file-directory
+                                       default-directory)))
+          (apply orig args))))
+    (advice-add 'agent-shell-dashboard--transcript-dirs :around
+                #'agent-shell-dashboard-skip-remote-roots)))
