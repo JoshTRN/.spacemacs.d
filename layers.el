@@ -56,6 +56,7 @@
    pandoc
    (pdf :variables
         pdf-tools t)
+   pdf-caret
    prettier
    (python :variables python-backend 'lsp python-lsp-server 'pyright)
    rust
