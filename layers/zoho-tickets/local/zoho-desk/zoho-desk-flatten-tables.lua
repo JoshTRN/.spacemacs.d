@@ -136,3 +136,58 @@ end
 
 Para = drop_when_empty
 Plain = drop_when_empty
+
+-- Mail HTML wraps everything in layout <div>s; the org writer renders
+-- them transparently anyway, so unwrap them.  This also puts the
+-- quoted history's blockquotes — which the divs keep apart — in
+-- direct contact, so the quote flattening below can see them.
+function Div(div)
+  return div.content
+end
+
+-- Quoted mail history nests one <blockquote> per reply level.  Org
+-- does not indent nested quotes, so the nesting shows up only as a
+-- pile of #+end_quote lines at the bottom of the thread; the
+-- "---- on DATE, NAME wrote ----" separator lines already delineate
+-- the individual messages.  Splice every inner quote into its parent,
+-- leaving one quote block around the whole history.  Children are
+-- walked before parents, so inner quotes are already flat (or
+-- dropped, when emptied by the anchor stripping below) by the time
+-- the outer one arrives here.
+function BlockQuote(bq)
+  if #bq.content == 0 then
+    return {}
+  end
+  local blocks = pandoc.Blocks({})
+  for _, block in ipairs(bq.content) do
+    if block.t == "BlockQuote" then
+      blocks:extend(block.content)
+    else
+      blocks:insert(block)
+    end
+  end
+  return pandoc.BlockQuote(blocks)
+end
+
+-- Zoho stamps quoted-thread HTML with anchors (<a name="x_NNNZDeskInteg">
+-- and id= attributes); pandoc writes every id out as a <<dedicated
+-- target>>, pure noise in a mail buffer since nothing links to them.
+-- Strip ids everywhere and drop the anchor spans left empty; emptied
+-- paragraphs and blockquotes then fall to the empty-dropping passes
+-- above (children are walked before parents).
+local function strip_identifier(el)
+  if el.attr.identifier ~= "" then
+    el.attr.identifier = ""
+    return el
+  end
+end
+
+Header = strip_identifier
+
+function Span(span)
+  span.attr.identifier = ""
+  if #span.content == 0 then
+    return {}
+  end
+  return span
+end

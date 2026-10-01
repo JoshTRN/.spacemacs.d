@@ -78,6 +78,7 @@ Each entry is either:
                zoho-desk-authorize
                zoho-desk-add-time-entry
                zoho-desk-set-status
+               zoho-desk-set-field
                zoho-desk-log-time-from-org
                zoho-desk-start-ticket-timer
                zoho-desk-finish-ticket-timer
@@ -92,6 +93,7 @@ Each entry is either:
       "azta" 'zoho-desk-authorize
       "aztt" 'zoho-desk-add-time-entry
       "azts" 'zoho-desk-set-status
+      "aztF" 'zoho-desk-set-field
       "aztl" 'zoho-desk-log-time-from-org
       "azti" 'zoho-desk-start-ticket-timer
       "azto" 'zoho-desk-finish-ticket-timer
@@ -112,6 +114,7 @@ Each entry is either:
       "t" 'zoho-desk-add-time-entry
       "T" 'zoho-desk-start-ticket-timer
       "u" 'zoho-desk-set-status
+      "f" 'zoho-desk-set-field
       "w" 'zoho-desk-copy-org-snippet
       "y" 'zoho-desk-copy-ticket-url
       "#" 'zoho-desk-copy-ticket-number
@@ -121,11 +124,17 @@ Each entry is either:
       "q" 'zoho-desk-quit)
     ;; Ticket documents are org-mode; the zoho commands ride the
     ;; minor-mode leader so org's own leader keys stay available.
+    (spacemacs/declare-prefix-for-minor-mode 'zoho-desk-ticket-minor-mode
+      "g" "go to")
     (spacemacs/set-leader-keys-for-minor-mode 'zoho-desk-ticket-minor-mode
       "1" 'zoho-desk-tab-overview
       "2" 'zoho-desk-tab-thread
       "3" 'zoho-desk-tab-comments
       "4" 'zoho-desk-tab-time-logs
+      "go" 'zoho-desk-tab-overview
+      "ge" 'zoho-desk-tab-thread
+      "gc" 'zoho-desk-tab-comments
+      "gl" 'zoho-desk-tab-time-logs
       "e" 'zoho-desk-expand-thread-at-point
       "s" 'zoho-desk-send-reply
       "l" 'zoho-desk-submit-time-log
@@ -138,6 +147,7 @@ Each entry is either:
       "t" 'zoho-desk-add-time-entry
       "T" 'zoho-desk-start-ticket-timer
       "u" 'zoho-desk-set-status
+      "f" 'zoho-desk-set-field
       "r" 'zoho-desk-refresh-ticket
       "b" 'zoho-desk-browse-ticket
       "w" 'zoho-desk-copy-org-snippet

@@ -157,14 +157,17 @@ Ticket table (right pane):
 
 Ticket document (org buffer, =zoho-desk-ticket-minor-mode=). The
 buffer is read-only except the Reply and New Time Log input fields;
-the header-line tabs are clickable. Commands are on the major-mode
+the header-line tabs are clickable. The header line's key hint is
+hidden by default — =zoho-desk-toggle-header-key= (or setting
+=zoho-desk-header-key-hint=) shows it. Commands are on the major-mode
 leader (~,~ or ~SPC m~) as well as =C-c z=:
 
 | Leader key | Also         | Description                              |
 |------------+--------------+------------------------------------------|
 | ~, 1-4~    | ~C-c z 1-4~, click | Overview / Thread / Comments / Time Logs tab |
+| ~, g o/e/c/l~ |           | Go to Overview / Email thread / Comments / Logs |
 |            | ~gt~ / ~gT~  | Next / previous tab (evil)               |
-| ~, e~      | ~C-c z e~    | Fetch full email body at point           |
+| ~, e~      | ~C-c z e~, ~RET~ | Fetch full email body at point (~RET~ on its marker line) |
 | ~, s~      | ~C-c z s~    | Send the Reply section as email          |
 | ~, l~      | ~C-c z l~    | Post the New Time Log section            |
 | ~, .~      | ~C-c .~      | Org date picker for the Executed / End fields |
@@ -173,6 +176,7 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, t~      | ~C-c z t~    | Add time entry                           |
 | ~, T~      | ~C-c z T~    | Start the ticket timer on this ticket    |
 | ~, u~      | ~C-c z u~    | Set the ticket's status                  |
+| ~, f~      | ~C-c z f~    | Set a ticket field (custom fields too)   |
 | ~, w~      | ~C-c z w~    | Copy org heading with ZOHO_TICKET_ID     |
 | ~, y~      | ~C-c z y~    | Copy agent-console ticket URL            |
 | ~, #~      | ~C-c z #~    | Copy ticket number (=#ART-364= form)     |

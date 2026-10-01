@@ -176,6 +176,11 @@ Older threads show their summary; expand them with
 `zoho-desk-expand-thread-at-point'."
   :type 'integer)
 
+(defconst zoho-desk--thread-page-size 20
+  "Page size of the ticket thread list requests.
+`zoho-desk--fetch-older-threads' pages by this step until the
+whole correspondence is listed.")
+
 (defcustom zoho-desk-comments-public nil
   "When non-nil, comments are posted as public (visible to the contact)."
   :type 'boolean)
@@ -1015,8 +1020,9 @@ The newline stays, so the visual line break survives; only inside
 verbatim blocks (example, src, export) are the backslashes left
 alone, since there they are content.  Markup blocks like quote
 and center hold prose, so theirs are stripped too.  A signature's
-box-drawing rule (see zoho-desk-flatten-tables.lua) also pulls
-itself up against the line above it."
+box-drawing rule (see zoho-desk-flatten-tables.lua) and a quote
+block's #+end_quote line also pull themselves up against the line
+above them."
   (with-temp-buffer
     (insert org)
     (goto-char (point-min))
@@ -1027,6 +1033,12 @@ itself up against the line above it."
           (setq literal t))
          ((looking-at-p "[ \t]*#\\+end_\\(example\\|src\\|export\\)\\_>")
           (setq literal nil))
+         ((and (not literal)
+               (looking-at-p "[ \t]*#\\+end_quote\\_>"))
+          (save-excursion
+            (while (and (zerop (forward-line -1))
+                        (looking-at-p "[ \t]*$"))
+              (delete-region (point) (progn (forward-line 1) (point))))))
          ((and (not literal)
                (looking-at-p "[ \t]*─\\{2,\\}"))
           ;; After each deletion point is back on the rule line, so
@@ -1353,6 +1365,7 @@ Falls back to the first starred view, then the first view."
     (define-key map (kbd "t") #'zoho-desk-add-time-entry)
     (define-key map (kbd "T") #'zoho-desk-start-ticket-timer)
     (define-key map (kbd "u") #'zoho-desk-set-status)
+    (define-key map (kbd "f") #'zoho-desk-set-field)
     (define-key map (kbd "w") #'zoho-desk-copy-org-snippet)
     (define-key map (kbd "o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "]") #'zoho-desk-next-page)
@@ -1864,6 +1877,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z t") #'zoho-desk-add-time-entry)
     (define-key map (kbd "C-c z T") #'zoho-desk-start-ticket-timer)
     (define-key map (kbd "C-c z u") #'zoho-desk-set-status)
+    (define-key map (kbd "C-c z f") #'zoho-desk-set-field)
     (define-key map (kbd "C-c z g") #'zoho-desk-refresh-ticket)
     (define-key map (kbd "C-c z o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "C-c z w") #'zoho-desk-copy-org-snippet)
@@ -2065,6 +2079,20 @@ fields — code blocks stay darker than the field.")
                     (zoho-desk--set-tab heading))))
     map))
 
+(defcustom zoho-desk-header-key-hint nil
+  "When non-nil, ticket header lines show the tab navigation hint.
+Toggle interactively with `zoho-desk-toggle-header-key'."
+  :type 'boolean
+  :group 'zoho-desk)
+
+(defun zoho-desk-toggle-header-key ()
+  "Show or hide the tab navigation hint in ticket header lines."
+  (interactive)
+  (setq zoho-desk-header-key-hint (not zoho-desk-header-key-hint))
+  (force-mode-line-update t)
+  (message "Zoho Desk: header key hint %s"
+           (if zoho-desk-header-key-hint "shown" "hidden")))
+
 (defun zoho-desk--header-line ()
   "Return the tab header line for a ticket buffer."
   (concat
@@ -2080,7 +2108,8 @@ fields — code blocks stay darker than the field.")
                   'keymap (zoho-desk--tab-keymap (cdr tab))))
     zoho-desk--tabs
     " ")
-   (propertize "   (click, C-c z 1-4, or gt)" 'face 'shadow)))
+   (when zoho-desk-header-key-hint
+     (propertize "   (, g to navigate)" 'face 'shadow))))
 
 (defun zoho-desk--set-tab (heading)
   "Narrow the ticket buffer to HEADING, or widen when nil."
@@ -2160,6 +2189,11 @@ until an entry is opened by hand (TAB on its heading)."
   (interactive)
   (zoho-desk-tab-next t))
 
+(defconst zoho-desk--unfetched-marker-re
+  "\\[\\(?:not fetched\\|fetch failed: .*\\) — RET here to \\(?:load\\|retry\\)\\]"
+  "Matches the marker lines standing in for unfetched thread bodies.
+`zoho-desk-ret-dwim' recognizes them to expand the thread on RET.")
+
 (defun zoho-desk--insert-thread (thread)
   "Insert THREAD as an org subheading.
 Threads whose full `content' was prefetched show it; the rest
@@ -2176,7 +2210,7 @@ show their summary with a not-fetched marker."
       (insert (zoho-desk--html-to-org-body content))
     (insert (zoho-desk--org-body
              (concat (string-trim (or (alist-get 'summary thread) ""))
-                     "\n\n[not fetched — C-c z e here to load]")))))
+                     "\n\n[not fetched — RET here to load]")))))
 
 (defun zoho-desk--insert-time-entry (entry)
   "Insert time ENTRY as an org subheading with its details.
@@ -2232,6 +2266,62 @@ the body holds the full description and billing details."
                   (zoho-desk--html-to-org-body description)
                 (zoho-desk--org-body description))))))
 
+;;;; Ticket fields
+
+(defvar zoho-desk--ticket-fields nil
+  "Cached field metadata of the tickets module (GET /organizationFields).
+Fetched once per session: primed in the background by
+`zoho-desk--show-ticket', or synchronously by
+`zoho-desk--ensure-ticket-fields' when still missing.")
+
+(defun zoho-desk--ensure-ticket-fields ()
+  "Return the tickets module's field metadata, fetching it if need be."
+  (or zoho-desk--ticket-fields
+      (setq zoho-desk--ticket-fields
+            (or (alist-get 'data (zoho-desk--request
+                                  "GET" "/organizationFields"
+                                  :params '(("module" "tickets"))))
+                (error "Zoho Desk: no field metadata for the tickets module")))))
+
+(defun zoho-desk--ticket-field-value (ticket field)
+  "Return TICKET's current value of FIELD as a string, nil when unset."
+  (let* ((api (alist-get 'apiName field))
+         (value (cond
+                 ((string-prefix-p "cf_" api)
+                  (alist-get (intern api) (alist-get 'cf ticket)))
+                 ((equal api "productId")
+                  (or (alist-get 'productName (alist-get 'product ticket))
+                      (alist-get 'productId ticket)))
+                 (t (alist-get (intern api) ticket)))))
+    (cond
+     ((null value) nil)
+     ((eq value t) "true")
+     ((memq value '(:json-false :false)) "false")
+     ((vectorp value) (mapconcat (lambda (one) (format "%s" one))
+                                 value ", "))
+     ((stringp value) (and (not (string-empty-p value)) value))
+     (t (format "%s" value)))))
+
+(defun zoho-desk--insert-ticket-fields (ticket)
+  "Insert TICKET's filled custom fields as description items.
+The same \"Ticket Information\" the web UI's sidebar shows, in
+field order; empty fields stay hidden.  Needs the metadata cache,
+so the lines appear once `zoho-desk--ticket-fields' is primed
+(the show-ticket fetch does)."
+  (dolist (field zoho-desk--ticket-fields)
+    (when (eq (alist-get 'isCustomField field) t)
+      (when-let* ((value (zoho-desk--ticket-field-value ticket field)))
+        (insert (format "- %s :: %s\n"
+                        (alist-get 'displayLabel field)
+                        (pcase (alist-get 'type field)
+                          ("Date" (format-time-string
+                                   "[%Y-%m-%d %a]"
+                                   (date-to-time (concat value " 00:00"))))
+                          ("URL" (format "[[%s]]" value))
+                          (_ (truncate-string-to-width
+                              (string-join (split-string value "\n") " ")
+                              76 nil nil "…")))))))))
+
 (defun zoho-desk--render-ticket-org (ticket threads comments time-entries)
   "Fill the current buffer with an org document for TICKET."
   (let ((ticket-id (alist-get 'id ticket))
@@ -2261,6 +2351,8 @@ the body holds the full description and billing details."
                             'done 'todo))
             "\n")
     (insert "* Details\n"
+            (format "- Opened :: %s\n"
+                    (zoho-desk--org-timestamp (alist-get 'createdTime ticket)))
             (format "- Priority :: %s\n" (or (alist-get 'priority ticket) "-"))
             (format "- Due :: %s\n"
                     (if (alist-get 'dueDate ticket)
@@ -2269,7 +2361,12 @@ the body holds the full description and billing details."
             (format "- Contact :: %s\n" (zoho-desk--contact-name ticket))
             (format "- Assignee :: %s\n"
                     (zoho-desk--person-name (alist-get 'assignee ticket)))
-            (format "- Ticket ID :: %s\n" ticket-id)
+            (if-let* ((product (alist-get 'productName
+                                          (alist-get 'product ticket))))
+                (format "- Product :: %s\n" product)
+              ""))
+    (zoho-desk--insert-ticket-fields ticket)
+    (insert (format "- Ticket ID :: %s\n" ticket-id)
             (if-let* ((url (alist-get 'webUrl ticket)))
                 (format "- Web :: [[%s][open in Zoho Desk]]\n" url)
               ""))
@@ -2572,24 +2669,67 @@ BACKGROUND refreshes the buffer without popping or selecting it
                        (window-height . ,zoho-desk-ticket-window-height))))
     (zoho-desk--request-all-async
      `(("GET" ,(format "/tickets/%s" id)
-        :params (("include" "contacts,assignee")))
-       ("GET" ,(format "/tickets/%s/threads" id) :params (("limit" 20)))
+        :params (("include" "contacts,assignee,products")))
+       ("GET" ,(format "/tickets/%s/threads" id)
+        :params (("limit" ,zoho-desk--thread-page-size)))
        ;; Comments and time entries are best-effort, as before
        ;; (ignore-errors then).
        ("GET" ,(format "/tickets/%s/comments" id)
         :params (("limit" 50)) :soft-errors t)
        ("GET" ,(format "/tickets/%s/timeEntry" id)
-        :params (("limit" 50)) :soft-errors t))
+        :params (("limit" 50)) :soft-errors t)
+       ;; Primes the field metadata cache the Details section's
+       ;; custom field lines need; dropped once cached.
+       ,@(unless zoho-desk--ticket-fields
+           '(("GET" "/organizationFields"
+              :params (("module" "tickets")) :soft-errors t))))
      (lambda (results err)
        (when (= generation zoho-desk--show-ticket-generation)
          (if err
              (zoho-desk--show-fetch-error buf err)
-           (zoho-desk--prefetch-thread-bodies
-            id generation buf tab
-            (nth 0 results)
-            (alist-get 'data (nth 1 results))
-            (alist-get 'data (nth 2 results))
-            (alist-get 'data (nth 3 results)))))))))
+           (when-let* ((fields (alist-get 'data (nth 4 results))))
+             (setq zoho-desk--ticket-fields fields))
+           (zoho-desk--fetch-older-threads
+            id generation (alist-get 'data (nth 1 results))
+            (lambda (threads)
+              (zoho-desk--prefetch-thread-bodies
+               id generation buf tab
+               (nth 0 results) threads
+               (alist-get 'data (nth 2 results))
+               (alist-get 'data (nth 3 results)))))))))))
+
+(defun zoho-desk--fetch-older-threads (id generation threads callback)
+  "Fetch the rest of ticket ID's thread list after first page THREADS.
+The list arrives newest first in pages of
+`zoho-desk--thread-page-size'; as long as the pages so far came
+back full, an older one may exist and is requested, so every
+email of the correspondence ends up with a thread heading.
+CALLBACK gets the complete list.  A failed or empty page ends the
+paging quietly with what has arrived — the ticket still renders,
+at worst with a shortened history.  GENERATION stops the paging
+when a newer `zoho-desk--show-ticket' has superseded this one."
+  (if (or (null threads)
+          (not (zerop (mod (length threads) zoho-desk--thread-page-size)))
+          (/= generation zoho-desk--show-ticket-generation))
+      (funcall callback threads)
+    (zoho-desk--request-async
+     "GET" (format "/tickets/%s/threads" id)
+     (lambda (result err)
+       ;; Drop threads already listed: a reply arriving mid-paging
+       ;; shifts the offsets, which would otherwise duplicate the
+       ;; page boundary's thread.
+       (let* ((known (mapcar (lambda (thread) (alist-get 'id thread))
+                             threads))
+              (page (seq-remove (lambda (thread)
+                                  (member (alist-get 'id thread) known))
+                                (and (not err)
+                                     (alist-get 'data result)))))
+         (if (null page)
+             (funcall callback threads)
+           (zoho-desk--fetch-older-threads
+            id generation (append threads page) callback))))
+     :params `(("limit" ,zoho-desk--thread-page-size)
+               ("from" ,(length threads))))))
 
 (defun zoho-desk--prefetch-thread-bodies (id generation buf tab
                                              ticket threads comments
@@ -2645,12 +2785,25 @@ Zoho rewrites composer-uploaded inline images (our own outgoing
 ones, e.g. the signature logo) to this form when the sent email
 lands back in the thread.")
 
+(defconst zoho-desk--remote-image-link-re
+  "\\[\\[\\(https://[^][]+\\.\\(?:png\\|jpe?g\\|gif\\|webp\\)\\)\\]\\]"
+  "Org link whose target is a plain https image URL.
+Third-party systems (e.g. the ticket-images bucket) embed images
+by public URL rather than through Zoho's inline-image store.
+Requiring the image extension at the very end keeps most tracking
+pixels out, since those ride on query strings.  Fetched without
+API auth, unlike the other remote forms.")
+
 (defun zoho-desk--inline-image-file (path)
   "Cache file name for the inline image at API PATH."
-  (let ((ext (if (string-match "[?&]f=[^&]*\\.\\([A-Za-z0-9]+\\)\\(?:&\\|\\'\\)"
-                 path)
-                 (concat "." (downcase (match-string 1 path)))
-               "")))
+  (let ((ext (cond
+              ((string-match "[?&]f=[^&]*\\.\\([A-Za-z0-9]+\\)\\(?:&\\|\\'\\)"
+                             path)
+               (concat "." (downcase (match-string 1 path))))
+              ;; Plain image URLs carry the extension on the path.
+              ((string-match "\\.\\([A-Za-z0-9]+\\)\\'" path)
+               (concat "." (downcase (match-string 1 path))))
+              (t ""))))
     (expand-file-name (concat (md5 path) ext) zoho-desk--inline-image-dir)))
 
 (defun zoho-desk--overlay-inline-image (path file)
@@ -2668,15 +2821,30 @@ a re-render erases the buffer."
         (goto-char (point-min))
         (let ((target (concat "[[" path "]]")))
           (while (search-forward target nil t)
-            (unless (cl-some (lambda (ov) (overlay-get ov 'zoho-desk-image))
-                             (overlays-at (match-beginning 0)))
-              (let ((ov (make-overlay (match-beginning 0) (match-end 0))))
-                (overlay-put ov 'zoho-desk-image t)
-                (overlay-put ov 'display image)
-                ;; The org-link face underneath would draw its
-                ;; underline across the image.
-                (overlay-put ov 'face '(:underline nil))
-                (overlay-put ov 'evaporate t)))))))))
+            (let ((beg (match-beginning 0))
+                  (end (match-end 0)))
+              (unless (cl-some (lambda (ov) (overlay-get ov 'zoho-desk-image))
+                               (overlays-at beg))
+                (let ((ov (make-overlay beg end)))
+                  (overlay-put ov 'zoho-desk-image t)
+                  (overlay-put ov 'display image)
+                  ;; The org-link face underneath would draw its
+                  ;; underline across the image.
+                  (overlay-put ov 'face '(:underline nil))
+                  (overlay-put ov 'evaporate t)
+                  ;; Emails often paste images side by side on one
+                  ;; line; stack them instead.  The text is read-only,
+                  ;; so the line break goes in the display: when
+                  ;; another link ends just before this one, lead with
+                  ;; a newline.
+                  (when (save-excursion
+                          (goto-char beg)
+                          (skip-chars-backward " \t")
+                          (and (>= (- (point) 2) (point-min))
+                               (equal (buffer-substring-no-properties
+                                       (- (point) 2) (point))
+                                      "]]")))
+                    (overlay-put ov 'before-string "\n")))))))))))
 
 (defun zoho-desk--fetch-inline-image (path file)
   "Download the inline image at API PATH into FILE, then display it.
@@ -2698,11 +2866,36 @@ still needs the usual OAuth headers."
              (zoho-desk--overlay-inline-image path file))))))
      :raw t)))
 
+(defun zoho-desk--fetch-remote-image (url file)
+  "Download the public image at URL into FILE, then display it.
+Unlike `zoho-desk--fetch-inline-image' this sends no API auth —
+the target is an arbitrary public host, which must not see the
+OAuth token."
+  (let ((buf (current-buffer)))
+    (url-retrieve
+     url
+     (lambda (status)
+       (let ((err (plist-get status :error)))
+         (cond
+          (err (message "Zoho Desk: remote image fetch failed: %s" url))
+          ((not (eq url-http-response-status 200)))
+          (t
+           (let ((data (zoho-desk--response-body-raw)))
+             (unless (string-empty-p data)
+               (make-directory zoho-desk--inline-image-dir t)
+               (let ((coding-system-for-write 'binary))
+                 (write-region data nil file nil 'silent))
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (zoho-desk--overlay-inline-image url file))))))))
+       (kill-buffer))
+     nil t)))
+
 (defun zoho-desk--display-inline-images ()
   "Fetch and overlay the API inline images referenced in the buffer.
 Cached images show immediately; the rest arrive in the background."
   (when (and zoho-desk-inline-images (display-graphic-p))
-    (let (paths)
+    (let (paths remote)
       (save-excursion
         (save-restriction
           (widen)
@@ -2714,12 +2907,21 @@ Cached images show immediately; the rest arrive in the background."
           (goto-char (point-min))
           (while (re-search-forward zoho-desk--display-url-image-link-re
                                     nil t)
-            (push (match-string-no-properties 1) paths))))
+            (push (match-string-no-properties 1) paths))
+          ;; Plain public image URLs -- no auth at all.
+          (goto-char (point-min))
+          (while (re-search-forward zoho-desk--remote-image-link-re nil t)
+            (push (match-string-no-properties 1) remote))))
       (dolist (path (delete-dups (nreverse paths)))
         (let ((file (zoho-desk--inline-image-file path)))
           (if (file-exists-p file)
               (zoho-desk--overlay-inline-image path file)
             (zoho-desk--fetch-inline-image path file))))
+      (dolist (url (delete-dups (nreverse remote)))
+        (let ((file (zoho-desk--inline-image-file url)))
+          (if (file-exists-p file)
+              (zoho-desk--overlay-inline-image url file)
+            (zoho-desk--fetch-remote-image url file))))
       ;; Local file links (the signature preview's logo) need no
       ;; fetch — the link target is the file.
       (let (files)
@@ -2809,7 +3011,7 @@ when it is gone (e.g. the ticket was refreshed meanwhile)."
                    (zoho-desk--replace-thread-body
                     thread-id
                     (zoho-desk--org-body
-                     (format "[fetch failed: %s — C-c z e here to retry]"
+                     (format "[fetch failed: %s — RET here to retry]"
                              err))))
                (zoho-desk--replace-thread-body
                 thread-id
@@ -2817,6 +3019,23 @@ when it is gone (e.g. the ticket was refreshed meanwhile)."
                  (or (alist-get 'content thread)
                      (alist-get 'summary thread)
                      "")))))))))))
+
+(defun zoho-desk-ret-dwim ()
+  "Expand the thread when point is on its not-fetched marker line.
+Everywhere else RET keeps the binding it would have without this
+command (evil-org's, evil's, or org's — resolved dynamically, so
+the fallback tracks whatever those modes set up)."
+  (interactive)
+  (if (save-excursion
+        (beginning-of-line)
+        (re-search-forward zoho-desk--unfetched-marker-re
+                           (line-end-position) t))
+      (zoho-desk-expand-thread-at-point)
+    (let* ((zoho-desk-ticket-minor-mode nil)
+           (cmd (key-binding (kbd "RET"))))
+      (when (and (commandp cmd) (not (eq cmd 'zoho-desk-ret-dwim)))
+        (setq this-command cmd)
+        (call-interactively cmd)))))
 
 ;;;; Email reply
 
@@ -3202,9 +3421,15 @@ session cookie."
          ;; The servlet rejects a non-browser User-Agent.  url.el emits
          ;; its own UA header from `url-user-agent', so set that rather
          ;; than adding a second (duplicate) header via extra-headers.
+         ;; Encode it like the extra headers below: auth-source secrets
+         ;; are multibyte strings, and one multibyte header makes the
+         ;; whole request (headers + binary image body) multibyte, which
+         ;; url-http refuses to send ("Multibyte text in HTTP request").
          (url-user-agent
-          (or (zoho-desk--current-session-user-agent)
-              (user-error "Zoho Desk: refresh the session to capture its browser User-Agent")))
+          (encode-coding-string
+           (or (zoho-desk--current-session-user-agent)
+               (user-error "Zoho Desk: refresh the session to capture its browser User-Agent"))
+           'utf-8))
          ;; Ask for no gzip; the reply is a short URL and
          ;; `zoho-desk--response-body' does not decompress.
          (url-mime-encoding-string "identity")
@@ -3853,29 +4078,33 @@ decides whether the contact sees it."
   (interactive)
   (kill-buffer))
 
-;;;; Ticket status
-
-(defvar zoho-desk--ticket-statuses nil
-  "Cached status picklist of the tickets module, in layout order.")
+;;;; Ticket status and field setters
 
 (defun zoho-desk--ensure-ticket-statuses ()
-  "Return the valid ticket status names, fetching them once per session.
+  "Return the valid ticket status names.
 The picklist is the `allowedValues' of the tickets module's
-status field (GET /organizationFields) — the same list the web
-UI's status dropdown offers."
-  (or zoho-desk--ticket-statuses
-      (setq zoho-desk--ticket-statuses
-            (let* ((fields (alist-get 'data
-                                      (zoho-desk--request
-                                       "GET" "/organizationFields"
-                                       :params '(("module" "tickets")))))
-                   (status (seq-find
-                            (lambda (field)
-                              (equal (alist-get 'apiName field) "status"))
-                            fields)))
-              (or (mapcar (lambda (choice) (alist-get 'value choice))
-                          (alist-get 'allowedValues status))
-                  (error "Zoho Desk: no status picklist in the tickets module"))))))
+status field — the same list the web UI's status dropdown offers."
+  (let ((status (seq-find (lambda (field)
+                            (equal (alist-get 'apiName field) "status"))
+                          (zoho-desk--ensure-ticket-fields))))
+    (or (mapcar (lambda (choice) (alist-get 'value choice))
+                (alist-get 'allowedValues status))
+        (error "Zoho Desk: no status picklist in the tickets module"))))
+
+(defun zoho-desk--refresh-after-ticket-write (buf ticket-id)
+  "Refresh BUF after a successful background write to TICKET-ID.
+Same rules as after a sent time log: a ticket buffer refreshes
+only if it still shows this ticket, without stealing focus; a
+ticket table refreshes in place."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (cond
+       ((equal (alist-get 'id zoho-desk--ticket) ticket-id)
+        (zoho-desk--show-ticket ticket-id
+                                (alist-get 'ticketNumber zoho-desk--ticket)
+                                zoho-desk--current-tab t))
+       ((derived-mode-p 'zoho-desk-tickets-mode)
+        (zoho-desk--refresh-table))))))
 
 ;;;###autoload
 (defun zoho-desk-set-status (ticket-id status &optional buf)
@@ -3909,20 +4138,104 @@ update was issued from refreshes to show the new status."
                     (format "#%s" number)
                   ticket-id)
                 (or (alist-get 'status result) status))
-       (when (buffer-live-p buf)
-         (with-current-buffer buf
-           (cond
-            ;; Same rules as after a sent time log: refresh only if
-            ;; the buffer still shows this ticket, without stealing
-            ;; focus.
-            ((equal (alist-get 'id zoho-desk--ticket) ticket-id)
-             (zoho-desk--show-ticket ticket-id
-                                     (alist-get 'ticketNumber
-                                                zoho-desk--ticket)
-                                     zoho-desk--current-tab t))
-            ((derived-mode-p 'zoho-desk-tickets-mode)
-             (zoho-desk--refresh-table)))))))
+       (zoho-desk--refresh-after-ticket-write buf ticket-id)))
    :payload `(("status" . ,status))))
+
+(defun zoho-desk--editable-ticket-fields ()
+  "Return (LABEL . FIELD) choices over the module's editable fields.
+Display labels can collide between fields; later duplicates get
+their api name appended so every choice stays distinct."
+  (let ((named nil))
+    (dolist (field (zoho-desk--ensure-ticket-fields))
+      (unless (eq (alist-get 'isReadOnly field) t)
+        (let ((label (alist-get 'displayLabel field)))
+          (push (cons (if (assoc label named)
+                          (format "%s (%s)" label (alist-get 'apiName field))
+                        label)
+                      field)
+                named))))
+    (nreverse named)))
+
+(defun zoho-desk--read-ticket-field-value (field current)
+  "Prompt for a new value of ticket FIELD, showing CURRENT.
+Picklists complete over their allowed values, dates go through
+the org date reader, the product lookup completes over the
+product catalog, booleans ask yes/no; everything else edits
+CURRENT as plain text.  Returns the API-ready value — a string,
+or a vector for multiselects."
+  (let* ((label (alist-get 'displayLabel field))
+         (type (alist-get 'type field))
+         (choices (mapcar (lambda (choice) (alist-get 'value choice))
+                          (alist-get 'allowedValues field)))
+         (prompt (format "%s%s: " label
+                         (if current (format " (now %s)" current) ""))))
+    (pcase type
+      ("Picklist" (completing-read prompt choices nil t))
+      ("Multiselect" (vconcat (completing-read-multiple prompt choices)))
+      ("Date" (org-read-date nil nil nil label))
+      ("DateTime" (format-time-string "%FT%T.000Z"
+                                      (org-read-date t t nil label) t))
+      ("Boolean" (if (y-or-n-p (format "%s? " label)) "true" "false"))
+      ("LookUp"
+       ;; Only the product lookup has a listable target; other
+       ;; lookups take their raw record id.
+       (if (equal (alist-get 'apiName field) "productId")
+           (let* ((products (alist-get 'data
+                                       (zoho-desk--request
+                                        "GET" "/products"
+                                        :params '(("limit" 100)))))
+                  (names (mapcar (lambda (product)
+                                   (cons (alist-get 'productName product)
+                                         (alist-get 'id product)))
+                                 products))
+                  (name (completing-read prompt names)))
+             (or (cdr (assoc name names)) name))
+         (read-string prompt current)))
+      (_ (read-string prompt current)))))
+
+;;;###autoload
+(defun zoho-desk-set-field (ticket-id field value &optional buf)
+  "Set TICKET-ID's ticket FIELD to VALUE, in the background.
+FIELD is a field metadata alist from
+`zoho-desk--ensure-ticket-fields'; custom fields are sent inside
+the `cf' object, standard fields at the top level.  Interactively
+the ticket comes from the list line or ticket buffer at point
+\(falling back to a prompt), FIELD is completed by display label
+over the module's editable fields, and VALUE is read according
+to the field's type; an empty answer clears the field.  On
+success the buffer the update was issued from refreshes."
+  (interactive
+   (let* ((ticket (zoho-desk--ticket-at-point))
+          (named (zoho-desk--editable-ticket-fields))
+          (field (cdr (assoc (completing-read "Field: " named nil t)
+                             named))))
+     (list (if ticket
+               (alist-get 'id ticket)
+             (read-string "Ticket id: "))
+           field
+           (zoho-desk--read-ticket-field-value
+            field (and ticket (zoho-desk--ticket-field-value ticket field)))
+           (current-buffer))))
+  (let ((api (alist-get 'apiName field))
+        (label (alist-get 'displayLabel field)))
+    (message "Setting %s on ticket %s…" label ticket-id)
+    (zoho-desk--request-async
+     "PATCH" (format "/tickets/%s" ticket-id)
+     (lambda (result err)
+       (if err
+           (zoho-desk--announce-write-failure
+            (format "%s update on ticket %s" label ticket-id) err)
+         (message "Ticket %s: %s%s"
+                  (if-let* ((number (alist-get 'ticketNumber result)))
+                      (format "#%s" number)
+                    ticket-id)
+                  label
+                  (if (equal value "") " cleared"
+                    (format " set to %s" value)))
+         (zoho-desk--refresh-after-ticket-write buf ticket-id)))
+     :payload (if (string-prefix-p "cf_" api)
+                  `(("cf" . ((,api . ,value))))
+                `((,api . ,value))))))
 
 ;;;; Time entries
 
@@ -3931,14 +4244,33 @@ update was issued from refreshes to show the new status."
   (concat (format "%dh %02dm" hours minutes)
           (if (zerop seconds) "" (format " %02ds" seconds))))
 
+(defun zoho-desk--org-links-to-plain-text (text)
+  "Render org bracket links in TEXT as plain text.
+The timeEntry description is a plain string field — no rich-text
+switch exists (probed: descriptionType/contentType/isHtml/… all
+422) and the agent console escapes stored markup — so
+[[url][desc]] becomes \"desc (url)\" and [[url]] just the url."
+  (replace-regexp-in-string
+   "\\[\\[\\([^][]+\\)\\]\\(?:\\[\\([^][]+\\)\\]\\)?\\]"
+   (lambda (link)
+     (save-match-data
+       (string-match "\\[\\[\\([^][]+\\)\\]\\(?:\\[\\([^][]+\\)\\]\\)?\\]"
+                     link)
+       (let ((url (match-string 1 link))
+             (desc (match-string 2 link)))
+         (if desc (format "%s (%s)" desc url) url))))
+   text t t))
+
 (defun zoho-desk--post-time-entry (ticket-id duration description
                                              &optional buf callback executed)
   "POST a time entry of DURATION with DESCRIPTION to TICKET-ID.
 DURATION is a number of minutes or an (HOURS MINUTES SECONDS)
 list, normalized either way; EXECUTED is the entry's executed
-time as an Emacs time value, defaulting to now.  On failure BUF,
-when given, is refocused (it still holds the unsent content); on
-success CALLBACK, when given, is called with no arguments."
+time as an Emacs time value, defaulting to now.  Org links in
+DESCRIPTION are rendered to plain text — the field supports
+nothing richer.  On failure BUF, when given, is refocused (it
+still holds the unsent content); on success CALLBACK, when
+given, is called with no arguments."
   (let* ((total (if (numberp duration)
                     (* 60 (round duration))
                   (+ (* 3600 (nth 0 duration))
@@ -3962,7 +4294,8 @@ success CALLBACK, when given, is called with no arguments."
                 ("secondsSpent" . ,(number-to-string seconds))
                 ("executedTime" . ,(format-time-string
                                     "%Y-%m-%dT%H:%M:%S.000Z" executed t))
-                ("description" . ,description)))))
+                ("description"
+                 . ,(zoho-desk--org-links-to-plain-text description))))))
 
 (defun zoho-desk-pick-executed-time ()
   "Fill the New Time Log's Executed field with the org date picker."
@@ -4256,6 +4589,7 @@ not its echo) and the duration is computed at submit time."
     (kbd "t") #'zoho-desk-add-time-entry
     (kbd "T") #'zoho-desk-start-ticket-timer
     (kbd "u") #'zoho-desk-set-status
+    (kbd "f") #'zoho-desk-set-field
     (kbd "w") #'zoho-desk-copy-org-snippet
     (kbd "o") #'zoho-desk-browse-ticket
     (kbd "]") #'zoho-desk-next-page
@@ -4264,7 +4598,8 @@ not its echo) and the duration is computed at submit time."
   (dolist (state '(normal motion))
     (evil-define-minor-mode-key state 'zoho-desk-ticket-minor-mode
       (kbd "gt") #'zoho-desk-tab-next
-      (kbd "gT") #'zoho-desk-tab-previous))
+      (kbd "gT") #'zoho-desk-tab-previous
+      (kbd "RET") #'zoho-desk-ret-dwim))
   ;; evil-org's state maps outrank the plain minor-mode map, so field
   ;; cycling must be registered with Evil too.
   (dolist (state '(normal insert))
