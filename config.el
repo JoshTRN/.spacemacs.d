@@ -402,19 +402,33 @@ but reset any face remapping applied elsewhere."
     (remove-overlays (point-min) (point-max) 'org-inline-pad t)
     (save-excursion
       (goto-char (point-min))
-      ;; Match ~code~ or =verbatim= (doesn't cross newlines)
-      (while (re-search-forward "[=~][^=~\n]+?[=~]" nil t)
-        (let* ((beg (match-beginning 0))
-               (end (match-end 0))
-               (ov  (make-overlay beg end)))
-          (overlay-put ov 'org-inline-pad t)
-          (overlay-put ov 'face 'org-verbatim) ; keep your face
-          ;; add 1 space “padding” on each side, colored like org-verbatim
-
-          (overlay-put ov 'before-string
-                       (propertize " " 'face '(variable-pitch org-verbatim)))
-          (overlay-put ov 'after-string
-                       (propertize " " 'face '(variable-pitch org-verbatim))))))))
+      ;; `org-verbatim-re' only matches real spans: matching delimiters,
+      ;; valid border chars, and no whitespace just inside the markers —
+      ;; unlike a naive "[=~]...[=~]" it won't fire on prose like
+      ;; "false = absent; true = single-vault".  Group 2 is the span
+      ;; including markers, group 4 the body.
+      (while (re-search-forward org-verbatim-re nil t)
+        (let ((beg  (match-beginning 2))
+              (end  (match-end 2))
+              (body (match-string 4)))
+          ;; Same exclusions org's fontification applies: don't span
+          ;; lines, and in a table row don't span cell boundaries.
+          (unless (or (string-search "\n" body)
+                      (and (save-excursion
+                             (goto-char beg)
+                             (org-match-line "[ \t]*|"))
+                           (string-search "|" body)))
+            (let ((ov (make-overlay beg end)))
+              (overlay-put ov 'org-inline-pad t)
+              (overlay-put ov 'face 'org-verbatim) ; keep your face
+              ;; add 1 space “padding” on each side, colored like org-verbatim
+              (overlay-put ov 'before-string
+                           (propertize " " 'face '(variable-pitch org-verbatim)))
+              (overlay-put ov 'after-string
+                           (propertize " " 'face '(variable-pitch org-verbatim)))))
+          ;; The char after a span can double as the pre-border of the
+          ;; next one; the search consumed it, so back up to the span end.
+          (goto-char end))))))
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                              ORG-VARS
