@@ -95,6 +95,9 @@
    yaml
    zoho-tickets
    zoho-projects
+   (command-audit :variables
+                  command-audit-targets '(zoho-tickets zoho-projects
+                                          posframe-timer agent-shell))
    posframe-timer
    agent-shell
    ))

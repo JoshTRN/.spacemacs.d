@@ -1,0 +1,103 @@
+#+TITLE: command-audit layer
+
+* Description
+Tallies which interactive commands you actually use, per day, into a
+JSON file, and serves an interactive report of it from Emacs — so
+you can see which commands earn their keybindings.
+
+Only interactive invocations are counted: the recorder rides
+=post-command-hook= and reads =this-command=, so internal function
+calls never register.  The per-command work is a symbol test plus a
+few =string-prefix-p= calls, and every tally/IO error is swallowed —
+the log can never break editing.
+
+* Install
+Add the layer to the layers list with the targets you want audited:
+
+#+begin_src emacs-lisp
+(command-audit :variables
+               command-audit-targets '(zoho-tickets zoho-projects
+                                       posframe-timer agent-shell))
+#+end_src
+
+* Configuration
+| Variable                    | Default                       | Meaning                                      |
+|-----------------------------+-------------------------------+----------------------------------------------|
+| =command-audit-targets=       | =nil=                           | what to audit: layer symbols and/or prefixes |
+| =command-audit-log-file=      | =~/.emacs.d/command-audit.json= | where the tallies are written                |
+| =command-audit-server-port=   | =8377=                          | port the usage report is served on           |
+| =command-audit-template-file= | =command-audit.html= (in-layer) | HTML template for the usage report           |
+
+Each entry in =command-audit-targets= is one of:
+
+- a *string* — a command-name prefix.  ="foo"= counts every
+  =foo-...= command, matching the package naming convention; use
+  this for targets that aren't Spacemacs layers.
+- a *symbol* — a Spacemacs layer name.  The layer is resolved via
+  =configuration-layer/get-layer= and the names of all the packages
+  it owns become prefixes (e.g. =zoho-tickets= → =zoho-desk=).  A
+  layer that can't be resolved falls back to its own name as a
+  prefix.
+
+Targets are resolved lazily on first use and cached; after changing
+them in a live session, run ~M-x command-audit-refresh-targets~.
+
+* Usage report (web UI)
+~M-x command-audit-serve~ serves an interactive report at
+=http://localhost:8377/= and opens it in the browser; ~M-x
+command-audit-stop-server~ stops it.  The server runs inside Emacs
+(=make-network-process=, no external dependency) and renders the
+template on every request, so reloading the page always shows
+current data.
+
+** What the report shows
+- A *filter bar* scoping everything below it: date-range presets
+  (7 / 30 / 90 days, all time), *prefix chips*, and a
+  command-name search box (press =/= to jump to it).
+- A *hero figure* — total invocations for the slice, with the
+  percentage change against the immediately preceding period of
+  the same length — beside commands / active days / per-active-day
+  / busiest-day stats, over a per-day column chart.
+- *Most-used commands*: the ranked bar chart, capped at the top 18
+  with the rest one click away.  Selecting a command (click, or
+  =Enter=; =Escape= deselects) drives the *Detail* panel: its share
+  of the shown total, active days, peak, last use, and its own
+  daily sparkline.
+- A *table view* twin for both charts — never capped, so every
+  value is reachable without hovering.
+- *Light and dark themes.*  Dark is the
+  =functional-contrast-dragonized= palette (base =#161925=, cards
+  over =#0e1019=, the signature magenta =#c50ed2= as the data
+  hue); light pairs a neutral surface with =#a017ab=.  Follows the
+  OS by default; the header button cycles auto → light → dark.
+- *Refresh* refetches =/data.json= in place, so a long-lived tab
+  picks up new usage without a reload.
+
+** Prefix chips
+The chips are *not hard-coded in the template*: the server sends
+the prefixes it resolved from =command-audit-targets=, and the page
+builds one chip per prefix that has data (plus =All=, plus =other=
+for anything logged outside the current targets).  Add a layer to
+the targets and its chip appears; audit a single target and the
+row hides itself.  A command is attributed to its *longest*
+matching prefix, so =agent-shell-dashboard-…= is counted under
+=agent-shell-dashboard= rather than =agent-shell=.
+
+** Template
+=local/command-audit/command-audit.html= — self-contained
+HTML/CSS/JS (no CDN, works offline) with two tokens the server
+fills in: =__COMMAND_AUDIT_DATA__= (the log) and
+=__COMMAND_AUDIT_META__= (prefixes, targets, log path, render
+time).  Point =command-audit-template-file= at a copy to restyle
+without touching the layer.
+
+* Log format
+Chart-ready JSON, one object per command, one key per day:
+
+#+begin_src json
+{"zoho-desk-dashboard": {"2026-09-30": 4}, "zoho-desk-send-reply": {"2026-09-30": 2}}
+#+end_src
+
+The file is rewritten on every increment, so it is always current
+and crash-safe.  The collection window is open-ended — let it run
+for a week or more before analyzing.
