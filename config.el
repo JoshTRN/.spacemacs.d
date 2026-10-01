@@ -294,6 +294,15 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
 (add-hook 'evil-insert-state-entry-hook (lambda () (blink-cursor-mode 1)))
 (add-hook 'evil-insert-state-exit-hook (lambda () (blink-cursor-mode 0)))
 
+(defun backward-delete-word (&optional arg)
+  "Delete the previous ARG words without saving them to the kill ring."
+  (interactive "p")
+  (delete-region (point) (progn (backward-word (or arg 1)) (point))))
+
+(global-set-key (kbd "<C-backspace>") #'backward-delete-word)
+(with-eval-after-load 'evil
+  (define-key evil-insert-state-map (kbd "<C-backspace>") #'backward-delete-word))
+
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           ORG-FUNCTIONS
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
