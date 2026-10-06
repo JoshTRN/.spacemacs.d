@@ -97,7 +97,11 @@
    zoho-projects
    (command-audit :variables
                   command-audit-targets '(zoho-tickets zoho-projects
-                                          posframe-timer agent-shell))
+                                          posframe-timer agent-shell)
+                  command-audit-excluded-commands '(agent-shell-next-item
+                                                    agent-shell-previous-item
+                                                    agent-shell-ui-toggle-fragment))
    posframe-timer
+   work-week
    agent-shell
    ))

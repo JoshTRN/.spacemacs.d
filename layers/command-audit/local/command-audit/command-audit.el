@@ -46,6 +46,16 @@ run `command-audit-refresh-targets'."
                          (symbol :tag "Spacemacs layer")))
   :group 'command-audit)
 
+(defcustom command-audit-excluded-commands nil
+  "Commands never tallied, even when they match an audited target.
+Some commands are interactive only incidentally — navigation,
+folding, RET dispatchers — and fire constantly without reflecting
+deliberate usage.  List their symbols here to keep them out of the
+log.  `command-audit-purge-excluded' also deletes their existing
+tallies."
+  :type '(repeat symbol)
+  :group 'command-audit)
+
 (defvar command-audit--prefixes 'unresolved
   "List of command-name prefix strings, or `unresolved'.
 Resolved lazily from `command-audit-targets' on first use, after
@@ -83,34 +93,59 @@ Run this after changing the targets in a live session."
   (interactive)
   (setq command-audit--prefixes 'unresolved))
 
+(defun command-audit--ensure-counts ()
+  "Return the loaded tallies, reading the log file if needed."
+  (when (eq command-audit--counts 'unloaded)
+    (setq command-audit--counts
+          (and (file-exists-p command-audit-log-file)
+               (ignore-errors
+                 (json-parse-string
+                  (with-temp-buffer
+                    (insert-file-contents command-audit-log-file)
+                    (buffer-string))
+                  :object-type 'alist :array-type 'list)))))
+  command-audit--counts)
+
+(defun command-audit--write-counts ()
+  "Write the in-memory tallies to `command-audit-log-file'."
+  (with-temp-file command-audit-log-file
+    (insert (json-encode command-audit--counts))))
+
 (defun command-audit--record ()
   "Tally `this-command' when it belongs to an audited target.
 On `post-command-hook' for every command, so the cheap tests come
 first and any resolution or tallying trouble is swallowed — the
 log must never break editing."
-  (when (symbolp this-command)
+  (when (and (symbolp this-command)
+             (not (memq this-command command-audit-excluded-commands)))
     (condition-case nil
         (progn
           (command-audit--ensure-prefixes)
           (let ((name (symbol-name this-command)))
             (when (cl-some (lambda (prefix) (string-prefix-p prefix name))
                            command-audit--prefixes)
-              (when (eq command-audit--counts 'unloaded)
-                (setq command-audit--counts
-                      (and (file-exists-p command-audit-log-file)
-                           (ignore-errors
-                             (json-parse-string
-                              (with-temp-buffer
-                                (insert-file-contents command-audit-log-file)
-                                (buffer-string))
-                              :object-type 'alist :array-type 'list)))))
+              (command-audit--ensure-counts)
               (cl-incf (alist-get (intern (format-time-string "%Y-%m-%d"))
                                   (alist-get this-command
                                              command-audit--counts)
                                   0))
-              (with-temp-file command-audit-log-file
-                (insert (json-encode command-audit--counts))))))
+              (command-audit--write-counts))))
       (error nil))))
+
+(defun command-audit-purge-excluded ()
+  "Delete `command-audit-excluded-commands' tallies from the log."
+  (interactive)
+  (command-audit--ensure-counts)
+  (let ((purged (cl-remove-if-not
+                 (lambda (entry)
+                   (memq (car entry) command-audit-excluded-commands))
+                 command-audit--counts)))
+    (when purged
+      (setq command-audit--counts
+            (cl-set-difference command-audit--counts purged))
+      (command-audit--write-counts))
+    (message "command-audit: purged %d command%s from the log"
+             (length purged) (if (= (length purged) 1) "" "s"))))
 
 (add-hook 'post-command-hook #'command-audit--record)
 
@@ -161,6 +196,8 @@ template."
    (list (cons "prefixes" (vconcat (command-audit--ensure-prefixes)))
          (cons "targets" (vconcat (mapcar (lambda (target) (format "%s" target))
                                           command-audit-targets)))
+         (cons "excluded" (vconcat (mapcar #'symbol-name
+                                           command-audit-excluded-commands)))
          (cons "logFile" (abbreviate-file-name command-audit-log-file))
          (cons "generated" (format-time-string "%Y-%m-%dT%H:%M:%S")))))
 
