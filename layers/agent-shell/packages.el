@@ -76,14 +76,23 @@
     ;; models" / "Available modes" at shell startup.
     (setq agent-shell-anthropic-default-model-id "claude-fable-5[1m]")
     (setq agent-shell-anthropic-default-session-mode-id "bypassPermissions")
-    ;; evil's motion-state `?' (evil-search-backward) outranks
+    ;; evil's state maps (motion `?', visual `>') outrank
     ;; `agent-shell-mode-map', so bind buffer-locally per state instead.
-    (defun agent-shell-help-menu-local-keys ()
-      "Bind ? to `agent-shell-help-menu' across evil states, buffer-locally."
+    (defun agent-shell-quote-or-shift-right ()
+      "Quote read-only selections into the prompt; shift writable ones."
+      (interactive)
+      (if (text-property-not-all (region-beginning) (region-end)
+                                 'read-only nil)
+          (call-interactively #'agent-shell-quote-region)
+        (call-interactively #'evil-shift-right)))
+    (defun agent-shell-evil-local-keys ()
+      "Bind agent-shell commands across evil states, buffer-locally."
       (when (fboundp 'evil-local-set-key)
         (dolist (state '(normal motion))
-          (evil-local-set-key state (kbd "?") #'agent-shell-help-menu))))
-    (add-hook 'agent-shell-mode-hook #'agent-shell-help-menu-local-keys)))
+          (evil-local-set-key state (kbd "?") #'agent-shell-help-menu))
+        (evil-local-set-key 'visual (kbd ">")
+                            #'agent-shell-quote-or-shift-right)))
+    (add-hook 'agent-shell-mode-hook #'agent-shell-evil-local-keys)))
 
 (defun agent-shell/init-agent-shell-dashboard ()
   (use-package agent-shell-dashboard
