@@ -298,6 +298,13 @@ plain text nor a code block.")
   '((t :inherit zoho-desk-accent))
   "Face of @agent mentions in comment fields and comment entries.")
 
+(defface zoho-desk-unread
+  '((t :weight bold :inherit font-lock-keyword-face))
+  "Face of unread ticket rows in the ticket table.
+Layered on top of each column's usual face, so columns with their
+own foreground (ticket number, overdue dates) keep it and gain
+the bold weight.")
+
 (defun zoho-desk--blend-colors (a b)
   "Return the hex color midway between color names A and B.
 Nil when either name does not resolve (e.g. tty frames)."
@@ -986,7 +993,8 @@ content, ready to retry)."
       (insert html)
       (let ((dom (libxml-parse-html-region (point-min) (point-max))))
         (erase-buffer)
-        (let ((shr-width 76)
+        (let ((shr-fill-text nil)
+              (shr-width 76)
               (shr-use-fonts nil)
               (shr-inhibit-images t))
           (shr-insert-document dom)))
@@ -1081,6 +1089,7 @@ missing, or chokes on the input."
                              (point-min) (point-max)
                              zoho-desk-pandoc-program t '(t nil) nil
                              "-f" "html-auto_identifiers" "-t" "org"
+                             "--wrap=none"
                              (and (file-readable-p
                                    zoho-desk--pandoc-lua-filter)
                                   (list "--lua-filter"
@@ -1389,20 +1398,55 @@ Falls back to the first starred view, then the first view."
   (tabulated-list-init-header))
 
 (defun zoho-desk--ticket-entry (ticket)
-  "Convert TICKET alist into a `tabulated-list-entries' element."
+  "Convert TICKET alist into a `tabulated-list-entries' element.
+When TICKET carries an isRead flag (the table fetch asks for it
+via the include parameter) and it is false, every column takes
+`zoho-desk-unread' underneath its usual face."
   (let* ((due (alist-get 'dueDate ticket))
          (overdue (and (stringp due)
-                       (time-less-p (date-to-time due) (current-time)))))
+                       (time-less-p (date-to-time due) (current-time))))
+         (unread (let ((cell (assq 'isRead ticket)))
+                   (and cell (not (cdr cell)))))
+         (mark (lambda (string &optional face)
+                 (let ((face (cond ((and face unread)
+                                    (list face 'zoho-desk-unread))
+                                   (unread 'zoho-desk-unread)
+                                   (t face))))
+                   (if face (propertize string 'face face) string)))))
     (list ticket
           (vector
-           (propertize (concat "#" (or (alist-get 'ticketNumber ticket) "?"))
-                       'face 'zoho-desk-accent)
-           (or (alist-get 'priority ticket) "-")
-           (or (alist-get 'status ticket) "-")
-           (propertize (zoho-desk--fmt-time due)
-                       'face (if overdue 'error 'default))
-           (zoho-desk--contact-name ticket)
-           (or (alist-get 'subject ticket) "")))))
+           (funcall mark (concat "#" (or (alist-get 'ticketNumber ticket) "?"))
+                    'zoho-desk-accent)
+           (funcall mark (or (alist-get 'priority ticket) "-"))
+           (funcall mark (or (alist-get 'status ticket) "-"))
+           (funcall mark (zoho-desk--fmt-time due) (and overdue 'error))
+           (funcall mark (zoho-desk--contact-name ticket))
+           (funcall mark (or (alist-get 'subject ticket) ""))))))
+
+(defun zoho-desk--mark-ticket-read (ticket-id)
+  "Mark TICKET-ID as read for this agent, on the server and in the table.
+Zoho only flips the per-agent unread flag from its own web UI, so
+opening a ticket here must POST markAsRead itself.  Fire and
+forget; the table row (when listed) drops its unread styling
+immediately rather than waiting for a refetch."
+  (zoho-desk--request-async
+   "POST" (format "/tickets/%s/markAsRead" ticket-id)
+   (lambda (_result err)
+     (when err (message "Zoho Desk: markAsRead: %s" err))))
+  (when-let* ((buf (get-buffer zoho-desk--tickets-buffer-name)))
+    (with-current-buffer buf
+      (let ((id (format "%s" ticket-id))
+            (changed nil))
+        (dolist (entry tabulated-list-entries)
+          (let* ((ticket (car entry))
+                 (cell (assq 'isRead ticket)))
+            (when (and cell (not (cdr cell))
+                       (equal (format "%s" (alist-get 'id ticket)) id))
+              (setcdr cell t)
+              (setf (cadr entry) (cadr (zoho-desk--ticket-entry ticket)))
+              (setq changed t))))
+        (when changed
+          (tabulated-list-print t))))))
 
 (defvar zoho-desk--table-generation 0
   "Bumped per table fetch so a stale response cannot win.")
@@ -1476,7 +1520,7 @@ mode line shows the fetch in flight."
          (mapcar (lambda (view-id)
                    `("GET" "/tickets"
                      :params ,(append `(("viewId" ,view-id)
-                                        ("include" "contacts,assignee")
+                                        ("include" "contacts,assignee,isRead")
                                         ("limit" ,zoho-desk-page-size)
                                         ("from" ,from))
                                       (zoho-desk--department-params))))
@@ -2666,7 +2710,8 @@ BACKGROUND refreshes the buffer without popping or selecting it
       (pop-to-buffer buf
                      `((display-buffer-reuse-window
                         display-buffer-below-selected)
-                       (window-height . ,zoho-desk-ticket-window-height))))
+                       (window-height . ,zoho-desk-ticket-window-height)))
+      (zoho-desk--mark-ticket-read id))
     (zoho-desk--request-all-async
      `(("GET" ,(format "/tickets/%s" id)
         :params (("include" "contacts,assignee,products")))
