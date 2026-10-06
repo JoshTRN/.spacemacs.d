@@ -400,7 +400,7 @@ It should only modify the values of Spacemacs settings."
    ;; installed packages.
    ;; Refer to the FAQ.org "package-quickstart" section for details.
    ;; (default nil)
-   dotspacemacs-enable-package-quickstart nil
+   dotspacemacs-enable-package-quickstart t
 
    ;; If non-nil a progress bar is displayed when spacemacs is loading. This
    ;; may increase the boot time on some systems and emacs builds, set it to
