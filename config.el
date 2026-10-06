@@ -837,28 +837,13 @@ workspace.windowAdded.connect(helmFloatSetup);
         (setq helm-floating-frame-kwin-script-registered t)))))
 
 ;; ──────────────── WM float rule: AeroSpace (macOS) ────────────────
-;; AeroSpace has no runtime rule registration, so float the frame
-;; after it is displayed: it holds focus at that point, and the bare
-;; `layout floating' acts on the focused window.  It also has no
-;; positioning command, but unlike Wayland, macOS lets clients place
-;; their own windows, so the frame is centered with
-;; `set-frame-position' once the float has landed (synchronous call,
-;; or the float could undo the move).
-(defun helm-floating-frame-aerospace-float ()
-  "Float the focused helm frame via the aerospace CLI."
-  (when (and (eq system-type 'darwin)
-             (executable-find "aerospace"))
-    (call-process "aerospace" nil nil nil "layout" "floating")))
+;; Lives in os/darwin.el, which hooks into
+;; `helm-floating-frame-after-display-functions' below.
 
-(defun helm-floating-frame-center (frame parent)
-  "Center FRAME over PARENT.  Helm places own-frames at point."
-  (let* ((pgeom (frame-geometry parent))
-         (ppos  (cdr (assq 'outer-position pgeom)))
-         (psize (cdr (assq 'outer-size pgeom)))
-         (fsize (cdr (assq 'outer-size (frame-geometry frame)))))
-    (set-frame-position frame
-                        (+ (car ppos) (/ (- (car psize) (car fsize)) 2))
-                        (+ (cdr ppos) (/ (- (cdr psize) (cdr fsize)) 2)))))
+(defvar helm-floating-frame-after-display-functions nil
+  "Abnormal hook run after the helm frame is displayed.
+Called with two arguments, the helm frame and the parent frame.
+os/<system-type>.el adds WM-specific float/placement steps here.")
 
 (defun helm-floating-frame-display (buffer &optional resume)
   "Display helm BUFFER in a floating frame ~75% of the parent frame."
@@ -868,10 +853,9 @@ workspace.windowAdded.connect(helmFloatSetup);
         (helm-display-buffer-width  (round (* 0.75 (frame-width))))
         (helm-display-buffer-height (round (* 0.75 (frame-height)))))
     (helm-display-buffer-in-own-frame buffer resume)
-    (helm-floating-frame-aerospace-float)
-    (when (eq system-type 'darwin)
-      (helm-floating-frame-center
-       (window-frame (get-buffer-window buffer t)) parent))))
+    (run-hook-with-args 'helm-floating-frame-after-display-functions
+                        (window-frame (get-buffer-window buffer t))
+                        parent)))
 
 (setq helm-display-function #'helm-floating-frame-display)
 

@@ -182,3 +182,30 @@ Existing timers for the same (file+heading+timestamp) are replaced."
 
 (setq insert-directory-program "gls"
       dired-use-ls-dired t)
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;;              HELM-FLOATING-FRAME: AEROSPACE FLOAT + CENTER
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Runs from `helm-floating-frame-after-display-functions' (config.el).
+;; AeroSpace has no runtime rule registration, so float the frame after
+;; it is displayed: it holds focus at that point, and the bare `layout
+;; floating' acts on the focused window.  It also has no positioning
+;; command (nikitabobko/AeroSpace#633), but unlike Wayland, macOS lets
+;; clients place their own windows, so center with `set-frame-position'
+;; once the float has landed (synchronous call, or the float could undo
+;; the move).  Helm's own-frame placement pops at point otherwise.
+
+(defun helm-floating-frame-aerospace-float-and-center (frame parent)
+  "Float FRAME via the aerospace CLI, then center it over PARENT."
+  (when (executable-find "aerospace")
+    (call-process "aerospace" nil nil nil "layout" "floating"))
+  (let* ((pgeom (frame-geometry parent))
+         (ppos  (cdr (assq 'outer-position pgeom)))
+         (psize (cdr (assq 'outer-size pgeom)))
+         (fsize (cdr (assq 'outer-size (frame-geometry frame)))))
+    (set-frame-position frame
+                        (+ (car ppos) (/ (- (car psize) (car fsize)) 2))
+                        (+ (cdr ppos) (/ (- (cdr psize) (cdr fsize)) 2)))))
+
+(add-hook 'helm-floating-frame-after-display-functions
+          #'helm-floating-frame-aerospace-float-and-center)
