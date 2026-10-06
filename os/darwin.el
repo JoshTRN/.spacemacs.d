@@ -125,10 +125,10 @@ Title shows the actual firing time."
 (run-at-time "08:00" 86400 #'ingest-org-schedules)
 
 (defun ingest-on-agenda-save ()
-  (when-let** ((fname (and buffer-file-name (expand-file-name buffer-file-name)))
-               (ag (mapcar #'expand-file-name (org-agenda-files))))
-              (when (member fname ag)
-                (ingest-org-schedules))))
+  (when-let* ((fname (and buffer-file-name (expand-file-name buffer-file-name)))
+              (ag (mapcar #'expand-file-name (org-agenda-files))))
+    (when (member fname ag)
+      (ingest-org-schedules))))
 (add-hook 'after-save-hook #'ingest-on-agenda-save)
 
 (defun schedule-org-alerts ()
