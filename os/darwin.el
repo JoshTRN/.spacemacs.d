@@ -184,28 +184,56 @@ Existing timers for the same (file+heading+timestamp) are replaced."
       dired-use-ls-dired t)
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;;              HELM-FLOATING-FRAME: AEROSPACE FLOAT + CENTER
+;;                HELM: INDEPENDENT CENTERED FRAME
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; Runs from `helm-floating-frame-after-display-functions' (config.el).
-;; AeroSpace has no runtime rule registration, so float the frame after
-;; it is displayed: it holds focus at that point, and the bare `layout
-;; floating' acts on the focused window.  It also has no positioning
-;; command (nikitabobko/AeroSpace#633), but unlike Wayland, macOS lets
-;; clients place their own windows, so center with `set-frame-position'
-;; once the float has landed (synchronous call, or the float could undo
-;; the move).  Helm's own-frame placement pops at point otherwise.
+;; AeroSpace must float Helm at detection, before tiling can resize the
+;; original frame.  Put this BEFORE the general Emacs workspace rule in
+;; ~/.aerospace.toml, then run `aerospace reload-config':
+;;
+;; [[on-window-detected]]
+;; if.app-id = "org.gnu.Emacs"
+;; if.window-title-regex-substring = "^Helm$"
+;; run = ["layout floating"]
+;;
+;; Set both name and title at creation: NS initially uses the frame name
+;; as its native title.  Center the hidden frame using its actual size;
+;; `display-buffer-pop-up-frame' makes it visible only after we return.
+;; No AeroSpace process or visible repositioning runs when Helm opens.
 
-(defun helm-floating-frame-aerospace-float-and-center (frame parent)
-  "Float FRAME via the aerospace CLI, then center it over PARENT."
-  (when (executable-find "aerospace")
-    (call-process "aerospace" nil nil nil "layout" "floating"))
-  (let* ((pgeom (frame-geometry parent))
-         (ppos  (cdr (assq 'outer-position pgeom)))
-         (psize (cdr (assq 'outer-size pgeom)))
-         (fsize (cdr (assq 'outer-size (frame-geometry frame)))))
-    (set-frame-position frame
-                        (+ (car ppos) (/ (- (car psize) (car fsize)) 2))
-                        (+ (cdr ppos) (/ (- (cdr psize) (cdr fsize)) 2)))))
+(require 'helm)
 
-(add-hook 'helm-floating-frame-after-display-functions
-          #'helm-floating-frame-aerospace-float-and-center)
+(defun helm-floating-frame-darwin-display (buffer &optional resume)
+  "Display Helm BUFFER in an independent frame centered before showing it.
+RESUME is passed through to Helm's own-frame display function."
+  (let* ((parent (selected-frame))
+         (geometry (frame-geometry parent))
+         (position (alist-get 'outer-position geometry))
+         (size (alist-get 'outer-size geometry))
+         (helm-display-buffer-width (round (* 0.75 (frame-width parent))))
+         (helm-display-buffer-height (round (* 0.75 (frame-height parent))))
+         (pop-up-frame-function
+          (lambda ()
+            (let* ((frame (make-frame
+                           (append '((name . "Helm")
+                                     (title . "Helm")
+                                     (visibility . nil)
+                                     (parent-frame . nil))
+                                   pop-up-frame-alist)))
+                   (frame-size (alist-get 'outer-size (frame-geometry frame)))
+                   (left (+ (car position) (/ (- (car size) (car frame-size)) 2)))
+                   (top (+ (cdr position) (/ (- (cdr size) (cdr frame-size)) 2))))
+              ;; (+ N) is absolute even for monitors with negative coordinates.
+              (modify-frame-parameters frame `((left + ,left) (top + ,top)))
+              frame))))
+    (helm-display-buffer-in-own-frame buffer resume)))
+
+;; Retire both previous display paths when reloading a running session.
+(remove-hook 'helm-floating-frame-after-display-functions
+             #'helm-floating-frame-aerospace-float-and-center)
+(when (featurep 'helm-posframe)
+  (helm-posframe-disable))
+
+;; Helm's reuse path repositions after creation; always use the new-frame
+;; path and let normal Helm cleanup delete the independent frame.
+(setq helm-display-buffer-reuse-frame nil
+      helm-display-function #'helm-floating-frame-darwin-display)

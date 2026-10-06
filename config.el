@@ -716,9 +716,6 @@ but reset any face remapping applied elsewhere."
 (make-variable-buffer-local 'global-hl-line-mode)
 (advice-add 'ediff-quit :around #'disable-y-or-n-p)
 (display-time-mode t)
-;; Disabled in favor of the HELM-FLOATING-FRAME section below.
-;; To reverse: uncomment this and delete that section.
-;; (helm-posframe-enable)
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           HELM-POSFRAME
@@ -733,13 +730,13 @@ but reset any face remapping applied elsewhere."
                                  (undecorated           . nil)))
 (with-eval-after-load 'helm-swoop
   (defun jw/helm-swoop--use-posframe-when-available (orig &rest args)
-    (let* ((posframe-enabled (and (featurep 'helm-posframe)
-                                  (boundp 'helm-display-function)
-                                  (not (eq helm-display-function #'helm-default-display-buffer))))
+    (let* ((custom-display (and (boundp 'helm-display-function)
+                                helm-display-function
+                                (not (eq helm-display-function #'helm-default-display-buffer))))
            ;; helm-swoop rebinds `helm-display-function' to `helm-swoop-split-window-function'.
-           ;; Feed it the current Helm display function (posframe) when enabled.
+           ;; Preserve the configured posframe or independent-frame display.
            (helm-swoop-split-window-function
-            (if posframe-enabled
+            (if custom-display
                 helm-display-function
               helm-swoop-split-window-function)))
       (apply orig args)))
@@ -750,9 +747,9 @@ but reset any face remapping applied elsewhere."
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                        HELM-FLOATING-FRAME
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; Replaces helm-posframe: the completion buffer goes to a real frame
-;; (title "Helm") that the window manager floats.  To reverse, delete
-;; this whole section and re-enable (helm-posframe-enable) above.
+;; The completion buffer goes to a real frame (title "Helm") that the
+;; window manager floats.  macOS supplies its own display function in
+;; os/darwin.el to center the frame while it is still hidden.
 
 ;; ──────────────── WM float rule: Hyprland (Linux) ────────────────
 ;; This build is Lua-configured (`hyprctl keyword' is gone); `hyprctl
@@ -836,10 +833,6 @@ workspace.windowAdded.connect(helmFloatSetup);
               t)
         (setq helm-floating-frame-kwin-script-registered t)))))
 
-;; ──────────────── WM float rule: AeroSpace (macOS) ────────────────
-;; Lives in os/darwin.el, which hooks into
-;; `helm-floating-frame-after-display-functions' below.
-
 (defvar helm-floating-frame-after-display-functions nil
   "Abnormal hook run after the helm frame is displayed.
 Called with two arguments, the helm frame and the parent frame.
@@ -857,7 +850,9 @@ os/<system-type>.el adds WM-specific float/placement steps here.")
                         (window-frame (get-buffer-window buffer t))
                         parent)))
 
-(setq helm-display-function #'helm-floating-frame-display)
+;; os/darwin.el is loaded first; keep its creation-time centering.
+(unless (eq system-type 'darwin)
+  (setq helm-display-function #'helm-floating-frame-display))
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           MARKDOWN-MODE
