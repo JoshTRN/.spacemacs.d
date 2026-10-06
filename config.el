@@ -716,7 +716,9 @@ but reset any face remapping applied elsewhere."
 (make-variable-buffer-local 'global-hl-line-mode)
 (advice-add 'ediff-quit :around #'disable-y-or-n-p)
 (display-time-mode t)
-(helm-posframe-enable)
+;; Disabled in favor of the HELM-FLOATING-FRAME section below.
+;; To reverse: uncomment this and delete that section.
+;; (helm-posframe-enable)
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           HELM-POSFRAME
@@ -744,6 +746,116 @@ but reset any face remapping applied elsewhere."
 
   (advice-add 'helm-swoop :around #'jw/helm-swoop--use-posframe-when-available)
   (advice-add 'helm-multi-swoop--exec :around #'jw/helm-swoop--use-posframe-when-available))
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;;                        HELM-FLOATING-FRAME
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Replaces helm-posframe: the completion buffer goes to a real frame
+;; (title "Helm") that the window manager floats.  To reverse, delete
+;; this whole section and re-enable (helm-posframe-enable) above.
+
+;; ──────────────── WM float rule: Hyprland (Linux) ────────────────
+;; This build is Lua-configured (`hyprctl keyword' is gone); `hyprctl
+;; eval' registers the rule with the running compositor.  Registration
+;; is per-compositor-lifetime: the guard resets if Emacs restarts, but
+;; re-registering the same named rule is harmless.
+(defvar helm-floating-frame-hyprland-rule-registered nil)
+
+(defun helm-floating-frame-hyprland-register ()
+  "Register a Hyprland float rule matching the helm frame title."
+  ;; Gate on the instance signature, not `executable-find': hyprctl is
+  ;; installed regardless of which compositor is running this session.
+  (when (and (not helm-floating-frame-hyprland-rule-registered)
+             (getenv "HYPRLAND_INSTANCE_SIGNATURE")
+             (executable-find "hyprctl"))
+    ;; Hyprland has no per-window animation speed (only the global
+    ;; animation tree carries speed/bezier), so snappiness comes from
+    ;; the style: popin from 95% hides the ~400ms scale-in and leaves
+    ;; the ~170ms fade as the perceived animation.  `no_anim = true'
+    ;; would make it instant.
+    (when (eq 0 (call-process
+                 "hyprctl" nil nil nil "eval"
+                 (concat "hl.window_rule({ name = \"float-helm\", "
+                         "match = { title = \"^(Helm)$\" }, "
+                         "float = true, "
+                         "animation = \"popin 95%\" })")))
+      (setq helm-floating-frame-hyprland-rule-registered t))))
+
+;; ──────────────── WM float rule: KWin / KDE Plasma (Linux) ────────────────
+;; Stock KWin stacks rather than tiles, so the frame floats on its own;
+;; what it lacks is placement -- a Wayland client cannot position
+;; itself, so KWin's smart placement drops the frame wherever it likes,
+;; and it lands in the taskbar and alt-tab like a normal window.  A
+;; KWin script loaded over D-Bus (alive until the Plasma session ends)
+;; centers each new "Helm" window and marks it as a popup.  Gated on
+;; the org.kde.KWin bus name because XDG_CURRENT_DESKTOP says "KDE"
+;; even under Hyprland here.
+(defvar helm-floating-frame-kwin-script-registered nil)
+
+(defconst helm-floating-frame-kwin-script "\
+function helmFloatSetup(window) {
+    if (!window.normalWindow || window.caption != \"Helm\") return;
+    window.skipTaskbar = true;
+    window.skipSwitcher = true;
+    window.skipPager = true;
+    /* Emacs requests an undecorated frame, but KWin decorates GTK
+       Wayland clients through the server-decoration protocol anyway;
+       drop the decoration here, before the centering math runs on
+       the decorated size. */
+    window.noBorder = true;
+    var area = workspace.clientArea(KWin.PlacementArea, window);
+    var g = window.frameGeometry;
+    g.x = area.x + (area.width - g.width) / 2;
+    g.y = area.y + (area.height - g.height) / 2;
+    window.frameGeometry = g;
+}
+workspace.windowAdded.connect(helmFloatSetup);
+")
+
+(defun helm-floating-frame-kwin-register ()
+  "Load a KWin script that centers the helm frame, once per session."
+  (when (and (not helm-floating-frame-kwin-script-registered)
+             (featurep 'dbusbind)
+             (member "org.kde.KWin"
+                     (dbus-ignore-errors (dbus-list-names :session))))
+    (let ((file (expand-file-name "helm-floating-frame.kwin.js"
+                                  temporary-file-directory)))
+      (with-temp-file file (insert helm-floating-frame-kwin-script))
+      ;; Drop a leftover copy from an earlier Emacs session first;
+      ;; loading a second script under the same plugin name fails.
+      (dbus-ignore-errors
+        (dbus-call-method :session "org.kde.KWin" "/Scripting"
+                          "org.kde.kwin.Scripting" "unloadScript"
+                          "helm-floating-frame"))
+      (when (dbus-ignore-errors
+              (dbus-call-method :session "org.kde.KWin" "/Scripting"
+                                "org.kde.kwin.Scripting" "loadScript"
+                                file "helm-floating-frame")
+              (dbus-call-method :session "org.kde.KWin" "/Scripting"
+                                "org.kde.kwin.Scripting" "start")
+              t)
+        (setq helm-floating-frame-kwin-script-registered t)))))
+
+;; ──────────────── WM float rule: AeroSpace (macOS) ────────────────
+;; AeroSpace has no runtime rule registration, so float the frame
+;; after it is displayed: it holds focus at that point, and the bare
+;; `layout floating' acts on the focused window.
+(defun helm-floating-frame-aerospace-float ()
+  "Float the focused helm frame via the aerospace CLI."
+  (when (and (eq system-type 'darwin)
+             (executable-find "aerospace"))
+    (call-process "aerospace" nil 0 nil "layout" "floating")))
+
+(defun helm-floating-frame-display (buffer &optional resume)
+  "Display helm BUFFER in a floating frame ~75% of the parent frame."
+  (helm-floating-frame-hyprland-register)
+  (helm-floating-frame-kwin-register)
+  (let ((helm-display-buffer-width  (round (* 0.75 (frame-width))))
+        (helm-display-buffer-height (round (* 0.75 (frame-height)))))
+    (helm-display-buffer-in-own-frame buffer resume))
+  (helm-floating-frame-aerospace-float))
+
+(setq helm-display-function #'helm-floating-frame-display)
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                           MARKDOWN-MODE
