@@ -21,12 +21,13 @@ Add the layer to the layers list with the targets you want audited:
 #+end_src
 
 * Configuration
-| Variable                    | Default                       | Meaning                                      |
-|-----------------------------+-------------------------------+----------------------------------------------|
-| =command-audit-targets=       | =nil=                           | what to audit: layer symbols and/or prefixes |
-| =command-audit-log-file=      | =~/.emacs.d/command-audit.json= | where the tallies are written                |
-| =command-audit-server-port=   | =8377=                          | port the usage report is served on           |
-| =command-audit-template-file= | =command-audit.html= (in-layer) | HTML template for the usage report           |
+| Variable                        | Default                       | Meaning                                      |
+|---------------------------------+-------------------------------+----------------------------------------------|
+| =command-audit-targets=           | =nil=                           | what to audit: layer symbols and/or prefixes |
+| =command-audit-excluded-commands= | =nil=                           | command symbols never tallied                |
+| =command-audit-log-file=          | =~/.emacs.d/command-audit.json= | where the tallies are written                |
+| =command-audit-server-port=       | =8377=                          | port the usage report is served on           |
+| =command-audit-template-file=     | =command-audit.html= (in-layer) | HTML template for the usage report           |
 
 Each entry in =command-audit-targets= is one of:
 
@@ -41,6 +42,21 @@ Each entry in =command-audit-targets= is one of:
 
 Targets are resolved lazily on first use and cached; after changing
 them in a live session, run ~M-x command-audit-refresh-targets~.
+
+** Excluding tangential commands
+Some commands match a target but are interactive only incidentally
+— navigation, folding, RET dispatchers — and fire constantly
+without reflecting deliberate usage.  List their symbols in
+=command-audit-excluded-commands= and they are never tallied:
+
+#+begin_src emacs-lisp
+(command-audit :variables
+               command-audit-excluded-commands '(agent-shell-next-item
+                                                 agent-shell-previous-item))
+#+end_src
+
+~M-x command-audit-purge-excluded~ also deletes the excluded
+commands' existing tallies from the log.
 
 * Usage report (web UI)
 ~M-x command-audit-serve~ serves an interactive report at
