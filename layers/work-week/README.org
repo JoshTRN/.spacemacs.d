@@ -1,0 +1,61 @@
+#+TITLE: work-week layer
+
+* Description
+An Outlook-style work-week calendar rendered as a text grid: one
+column per day (5 workdays by default, 7 for the full week), 48
+half-hour rows, point starting on the current time cell.
+
+Events are plain org files under =~/org/work-week/=, one folder per
+day (=YYYY-MM-DD/=), one file per event. The file's first active
+timestamp with a time range places it on the grid; its first heading
+is the title shown in the cell.
+
+* Usage
+=SPC a w w= opens the calendar (=C-u= first for the 7-day week).
+
+| Key   | Action                                             |
+|-------+----------------------------------------------------|
+| h     | previous lane at point, else previous day's last lane |
+| l     | next lane at point, else next day, same time row   |
+| w / b | next / previous day, same time row                 |
+| j / k | 30 minutes later / earlier                         |
+| v     | anchor a block selection; h/j/k/l stretch it       |
+| V     | select whole-week rows; j/k stretch them           |
+| dd    | delete the event under point                       |
+| D     | delete all events at this time (confirms when several overlap) |
+| RET   | capture selection, or visit event file at point    |
+| TAB / S-TAB | next / previous event (visits each lane)     |
+| ESC   | cancel selection                                   |
+| N G   | jump to time N, 24h (=10G= → 10:00, =1430G= → 14:30) |
+| gg / G | first / last row of the day (counts work on =gg= too) |
+| [ / ] | previous / next week                               |
+| t     | jump back to now                                   |
+| T     | toggle 5-day / 7-day view                          |
+| g r   | rescan folders and redraw                          |
+| q     | quit                                               |
+
+Today's column sits on the frame's default background (visible under
+solaire-styled buffers), and an orange underline (=work-week-now=)
+marks the last completed half hour, advancing once a minute.
+
+Capture opens a floating frame (80% of the parent, posframe-ish but a
+real frame, so the minibuffer, =M-x=, and all leader keys work)
+holding a plain org-mode buffer: the first heading is the event title
+and the remaining lines become the body — normal org editing
+throughout. =, ,= (or =C-c C-c=) commits — one event file per
+selected day — and =, k= (or =C-c C-k=) abandons it.
+
+Tiling window managers tile the capture frame unless told otherwise;
+machine-local config overrides =work-week-capture-frame-function= with
+a wrapper that registers a float rule (matching the frame title
+=work-week-capture=) and then calls =work-week-make-capture-frame=.
+See =local/joshua-xps13.el= for the Hyprland version; an Aerospace
+equivalent belongs in the macbook's local config.
+
+Recurring events: add an org repeater by hand to an event's timestamp
+(=<2026-10-05 Mon 09:00-10:30 +1w>=) and the grid projects it onto
+every matching day of whatever week is displayed.
+
+* Configuration
+- =work-week-directory= :: root folder (default =~/org/work-week/=).
+- =work-week-day-count= :: default number of columns, 5 or 7.
