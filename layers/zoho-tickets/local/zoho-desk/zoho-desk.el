@@ -528,6 +528,45 @@ for malformed input or missing/empty __Secure-iamsdt or crmcsr."
     (when (and valid sdt csr)
       (mapconcat #'identity pairs "; "))))
 
+(defun zoho-desk--session-headers-parse (paste)
+  "Extract a (COOKIE . USER-AGENT) pair from a request-headers PASTE.
+Understands the DevTools \"Copy request headers\" block (Chrome and
+Firefox) and \"Copy as cURL\" commands (-H/--header, -b/--cookie,
+-A/--user-agent).  Either slot is nil when PASTE holds no valid
+value for it."
+  (let ((case-fold-search t)
+        (paste (or paste ""))
+        (start 0)
+        cookie user-agent)
+    (dolist (line (split-string paste "[\r\n]+" t))
+      (let ((line (string-trim line "[ \t]+" "[ \t]*\\\\?[ \t]*")))
+        (cond ((string-match-p "\\`cookie:" line)
+               (setq cookie (or cookie (zoho-desk--session-cookie-parse line))))
+              ((string-match-p "\\`user-agent:" line)
+               (setq user-agent
+                     (or user-agent
+                         (zoho-desk--session-user-agent-parse line)))))))
+    (while (string-match
+            (concat "\\(?:\\`\\|[ \t\r\n]\\)\\(-H\\|--header\\|-b\\|--cookie\\|"
+                    "-A\\|--user-agent\\)[ \t]+\\([\"']\\)\\([^\r\n]*?\\)\\2")
+            paste start)
+      (let ((flag (match-string 1 paste))
+            (value (match-string 3 paste)))
+        (setq start (match-end 0))
+        (cond ((member flag '("-b" "--cookie"))
+               (setq cookie (or cookie (zoho-desk--session-cookie-parse value))))
+              ((member flag '("-A" "--user-agent"))
+               (setq user-agent
+                     (or user-agent
+                         (zoho-desk--session-user-agent-parse value))))
+              ((string-match-p "\\`cookie:" value)
+               (setq cookie (or cookie (zoho-desk--session-cookie-parse value))))
+              ((string-match-p "\\`user-agent:" value)
+               (setq user-agent
+                     (or user-agent
+                         (zoho-desk--session-user-agent-parse value)))))))
+    (cons cookie user-agent)))
+
 (defun zoho-desk--authinfo-quote (value)
   "Quote VALUE using auth-source's netrc syntax, not Lisp escaping."
   (cond
@@ -557,9 +596,12 @@ for malformed input or missing/empty __Secure-iamsdt or crmcsr."
     (auth-source-forget-all-cached)))
 
 (defun zoho-desk--refresh-session-cookie-flow (ticket)
-  "Open TICKET's agent console in the browser, then prompt for a Cookie header.
+  "Open TICKET's agent console in the browser, then prompt for its headers.
+One paste of the DevTools \"Copy request headers\" block (or Copy as
+cURL) supplies both the Cookie and the User-Agent; a bare Cookie
+line still works and falls back to a second User-Agent prompt.
 Returns the complete cookie string, now current and persisted.
-Quitting the prompt (C-g / ESC) returns nil — callers must then
+Quitting a prompt (C-g / ESC) returns nil — callers must then
 leave the reply alone.  A malformed paste or one without the needed
 cookies aborts with an explanatory error.  The upload servlet checks
 authentication when an image is uploaded; the console page is not a
@@ -574,29 +616,39 @@ reliable probe of the servlet session."
       (browse-url url))
     (let ((input (condition-case nil
                      (read-string
-                      (concat "Zoho session cookie refresh — in the browser: "
+                      (concat "Zoho session refresh — in the browser: "
                               "SIGN IN to the /agent/ console if it isn't "
                               "already (a fresh browser shows the customer "
                               "portal — that session won't do), reload, then "
-                              "F12 → Network → click a fresh support-host "
-                              "request → Request Headers → copy the whole "
-                              "Cookie line: "))
+                              "F12 → Network → right-click a fresh "
+                              "support-host request → Copy → Copy request "
+                              "headers, and paste the whole block here: "))
                    (quit nil))))
       (when input
-        (let ((cookie (zoho-desk--session-cookie-parse input)))
-          (unless cookie
-            (user-error (concat "Zoho Desk: that paste has no __Secure-iamsdt"
-                                " + crmcsr — copy the full Cookie request"
-                                " header from the Network pane")))
-          (let ((input-ua (condition-case nil
-                              (read-string
-                               "From the SAME browser request, copy the User-Agent line: ")
-                            (quit nil))))
-            (when input-ua
-              (let ((user-agent (zoho-desk--session-user-agent-parse input-ua)))
-                (unless user-agent
-                  (user-error "Zoho Desk: paste a nonempty, single-line User-Agent header"))
-                ;; Commit only after both prompts and persistence succeed.
+        (pcase-let ((`(,parsed-cookie . ,parsed-ua)
+                     (zoho-desk--session-headers-parse input)))
+          (let ((cookie (or parsed-cookie
+                            (zoho-desk--session-cookie-parse input))))
+            (unless cookie
+              (user-error (concat "Zoho Desk: that paste has no __Secure-iamsdt"
+                                  " + crmcsr — use Copy request headers on a"
+                                  " request in the Network pane")))
+            (let ((user-agent
+                   (or parsed-ua
+                       (let ((input-ua
+                              (condition-case nil
+                                  (read-string
+                                   (concat "No User-Agent in that paste — copy "
+                                           "the User-Agent line from the SAME "
+                                           "browser request: "))
+                                (quit nil))))
+                         (when input-ua
+                           (or (zoho-desk--session-user-agent-parse input-ua)
+                               (user-error (concat "Zoho Desk: paste a nonempty,"
+                                                   " single-line User-Agent"
+                                                   " header"))))))))
+              (when user-agent
+                ;; Commit only after both headers and persistence succeed.
                 (zoho-desk--persist-session-cookie cookie user-agent)
                 (setq zoho-desk--session-cookie cookie
                       zoho-desk--session-user-agent user-agent)
@@ -606,15 +658,16 @@ reliable probe of the servlet session."
 (defun zoho-desk-refresh-session-cookie ()
   "Capture a fresh agent-console session cookie for inline images.
 Opens the current ticket's agent console in the browser, then
-prompts for the browser's Cookie request header.  In the browser:
-make sure the /agent/ console is actually signed in — a fresh
-browser session lands on the customer-portal view, whose cookies
-the composer servlet refuses — then DevTools (F12) → Network tab →
-click a fresh request to the support host → Request Headers → copy
-the whole \"Cookie:\" line.  The complete header is preserved and
-saved to authinfo after checking for __Secure-iamsdt and crmcsr.
-A second prompt captures the User-Agent from the same request, so
-the session works with whichever browser supplied it.
+prompts for one paste of the browser's request headers.  In the
+browser: make sure the /agent/ console is actually signed in — a
+fresh browser session lands on the customer-portal view, whose
+cookies the composer servlet refuses — then DevTools (F12) →
+Network tab → right-click a fresh request to the support host →
+Copy → \"Copy request headers\".  That one paste carries both the
+Cookie and the User-Agent (Copy as cURL works too; a bare Cookie
+line still does, with a second prompt for the User-Agent).  The
+complete Cookie header is preserved and saved to authinfo with the
+User-Agent after checking for __Secure-iamsdt and crmcsr.
 Authentication is checked by the servlet when uploading an image."
   (interactive)
   (if (zoho-desk--refresh-session-cookie-flow
