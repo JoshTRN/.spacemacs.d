@@ -16,6 +16,8 @@
 ;;                                  section per status
 ;; - RET on a task                  org-mode task document with Overview,
 ;;                                  Comments and Time Logs tabs
+;; - `zoho-projects-create-task'    add a task to the selected project
+;;                                  straight from the dashboard (c)
 ;; - `zoho-projects-add-time-entry' post a time log to a task
 ;; - `zoho-projects-log-time-from-org' send org-clocked time to a task
 ;; - `zoho-projects-start-task-timer' clock the posframe timer in against
@@ -1036,6 +1038,7 @@ parallel pages of 100."
     (define-key map (kbd "P") #'zoho-projects-select-project)
     (define-key map (kbd "f") #'zoho-projects-quickfind)
     (define-key map (kbd "m") #'zoho-projects-toggle-only-mine)
+    (define-key map (kbd "c") #'zoho-projects-create-task)
     (define-key map (kbd "o") #'zoho-projects-browse-project)
     (define-key map (kbd "s") #'zoho-projects-toggle-sidebar)
     (define-key map (kbd "q") #'zoho-projects-quit)
@@ -1162,6 +1165,7 @@ top of the checked statuses."
     (define-key map (kbd "f") #'zoho-projects-quickfind)
     (define-key map (kbd "m") #'zoho-projects-toggle-only-mine)
     (define-key map (kbd "P") #'zoho-projects-select-project)
+    (define-key map (kbd "c") #'zoho-projects-create-task)
     (define-key map (kbd "t") #'zoho-projects-add-time-entry)
     (define-key map (kbd "T") #'zoho-projects-start-task-timer)
     (define-key map (kbd "w") #'zoho-projects-copy-org-snippet)
@@ -1297,6 +1301,44 @@ STATE tags a fetch in flight (`fetching') or a failed one
   (interactive)
   (unless zoho-projects--project (user-error "No project selected"))
   (zoho-projects--refresh-pool))
+
+;;;; Task creation
+
+(defun zoho-projects-create-task (name)
+  "Create a task named NAME in the dashboard's selected project.
+Posts in the background; on success the task pool refreshes so
+the new task shows up in the table, and the task opens as an org
+document ready for details, comments or time logs."
+  (interactive
+   (progn
+     (unless zoho-projects--project
+       (user-error "No project selected — open the dashboard first"))
+     (list (string-trim
+            (read-string (format "New task in %s: "
+                                 (alist-get 'name
+                                            zoho-projects--project)))))))
+  (when (string-empty-p (string-trim name))
+    (user-error "The task needs a name"))
+  (let ((project zoho-projects--project))
+    (message "Creating task in %s…" (alist-get 'name project))
+    (zoho-projects--request-async
+     "POST" (format "/portal/%s/projects/%s/tasks/"
+                    (zoho-projects--ensure-portal)
+                    (zoho-projects--id project))
+     (lambda (result err)
+       (if err
+           (zoho-projects--announce-write-failure
+            (format "creating task %S" name) err)
+         (let ((task (car (alist-get 'tasks result))))
+           (message "Task %s created in %s"
+                    (or (alist-get 'key task) name)
+                    (alist-get 'name project))
+           (when (eq project zoho-projects--project)
+             (zoho-projects--refresh-pool))
+           (when task
+             (zoho-projects--show-task project (zoho-projects--id task)
+                                       (alist-get 'key task))))))
+     :payload `(("name" ,name)))))
 
 ;;;; Quickfind
 
@@ -2918,6 +2960,7 @@ not its echo) and the hours are computed at submit time."
     (kbd "P") #'zoho-projects-select-project
     (kbd "f") #'zoho-projects-quickfind
     (kbd "m") #'zoho-projects-toggle-only-mine
+    (kbd "c") #'zoho-projects-create-task
     (kbd "o") #'zoho-projects-browse-project
     (kbd "q") #'zoho-projects-quit)
   (evil-define-key* 'normal zoho-projects-tasks-mode-map
@@ -2926,6 +2969,7 @@ not its echo) and the hours are computed at submit time."
     (kbd "P") #'zoho-projects-select-project
     (kbd "f") #'zoho-projects-quickfind
     (kbd "m") #'zoho-projects-toggle-only-mine
+    (kbd "c") #'zoho-projects-create-task
     (kbd "t") #'zoho-projects-add-time-entry
     (kbd "T") #'zoho-projects-start-task-timer
     (kbd "w") #'zoho-projects-copy-org-snippet

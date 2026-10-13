@@ -61,6 +61,7 @@
       "r" 'zoho-projects-refresh-tasks
       "p" 'zoho-projects-select-project
       "f" 'zoho-projects-quickfind
+      "c" 'zoho-projects-create-task
       "b" 'zoho-projects-browse-project
       "s" 'zoho-projects-toggle-sidebar
       "q" 'zoho-projects-quit)
@@ -69,6 +70,7 @@
       "f" 'zoho-projects-quickfind
       "r" 'zoho-projects-refresh-tasks
       "p" 'zoho-projects-select-project
+      "c" 'zoho-projects-create-task
       "t" 'zoho-projects-add-time-entry
       "T" 'zoho-projects-start-task-timer
       "w" 'zoho-projects-copy-org-snippet

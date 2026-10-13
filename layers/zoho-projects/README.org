@@ -17,6 +17,10 @@ traffic, posframe-timer time tracking.
     toggling filters is instant; ~P~ switches project
   - Quickfind (~SPC a z p f~): helm over a project's tasks, one
     section per status
+  - Create tasks in the selected project straight from the
+    dashboard (~c~ in either pane, ~, c~ on the leader): prompts
+    for the name, posts in the background, refreshes the table and
+    opens the new task
   - Tasks open as org-mode documents with Overview / Comments /
     Time Logs tabs; the status stands alone at the top as a
     heading badge (org-modern's TODO-keyword look, colored to
@@ -124,6 +128,7 @@ Statuses sidebar (left pane):
 | ~P~         | Switch project (selector)            |
 | ~g~ / ~gr~  | Refetch the project's tasks          |
 | ~f~         | Quickfind tasks (all statuses)       |
+| ~c~         | Create a task in this project        |
 | ~o~         | Open project in browser              |
 | ~s~         | Collapse/reopen the sidebar          |
 | ~q~         | Close dashboard, restore windows     |
@@ -136,6 +141,7 @@ Task table (right pane):
 | ~P~   | Switch project (selector)                |
 | ~g~ / ~gr~ | Refetch the project's tasks         |
 | ~f~   | Quickfind tasks (all statuses)           |
+| ~c~   | Create a task in this project            |
 | ~t~   | Add time log to task at point            |
 | ~T~   | Start the task timer on task at point    |
 | ~w~   | Copy org heading with the task's ids     |
@@ -234,6 +240,9 @@ Endpoints used (base =https://projectsapi.zoho.com/restapi=, header
   the task's date span (capped at =zoho-projects-timelog-months=,
   in parallel) and filters the =tasklogs= down to the task; the
   entries splice into the document when they land
+- =POST /portal/{pid}/projects/{proj}/tasks/= — form param =name=
+  (task creation; the new task lands in the project's default
+  task list with the default open status)
 - =POST .../tasks/{task}/comments/= — form param =content=
 - =POST .../tasks/{task}/logs/= — form params =date= (MM-DD-YYYY),
   =bill_status= (Billable / Non Billable), =hours= (H:MM),
