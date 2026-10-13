@@ -47,7 +47,6 @@
   (interactive)
   (hl-line-mode -1)
   (visual-fill-column-mode 1)
-  (message "Pretty Printing Buffer")
   (visual-line-mode 1))
 
 (defun pretty-print-header ()
@@ -272,17 +271,10 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
  treemacs-width 50
  vterm-max-scrollback 100000
  vterm-timer-delay 0.01
+ ;; turn off auto resume layout on spacemacs restart SPC q r
+ persp-auto-resume-time -1.0
+ persp-auto-save-opt 0
  )
-
-;; `dotspacemacs-auto-resume-layouts' is already nil, but `SPC q r'
-;; restarts Emacs with --resume-layouts, which overrides it and loads the
-;; persp autosave -- resurrecting transient buffers (agent-shell sessions,
-;; acp stderr logs) as empty fundamental-mode corpses.  Kill layout
-;; persistence outright: never save state, never resume it.  This runs
-;; before persp-mode activates (Spacemacs defers activation until after
-;; user-config), so it also neutralizes a forced resume.
-(setq persp-auto-resume-time -1.0
-      persp-auto-save-opt 0)
 
 (spacemacs/declare-prefix "oi" "Insert")
 (spacemacs/set-leader-keys "oh" #'host-config-file)
@@ -290,6 +282,11 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
 (spacemacs/set-leader-keys "oie" #'emoji-search)
 (spacemacs/set-leader-keys "oij" #'insert-java-log-heading)
 (spacemacs/set-leader-keys "oF" #'finder)
+(spacemacs/set-leader-keys "hdt" #'describe-text-properties)
+
+;; override `describe-theme' because it's bound to hdT already
+;; and I use `describe-text-properties' all the time.
+(spacemacs/set-leader-keys "hdt" #'describe-text-properties)
 
 (add-hook 'evil-insert-state-entry-hook (lambda () (blink-cursor-mode 1)))
 (add-hook 'evil-insert-state-exit-hook (lambda () (blink-cursor-mode 0)))
@@ -317,7 +314,7 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
   "Color list bullets (+ - *) with a uniform muted purple."
   (font-lock-add-keywords
    nil
-   '(("^[ \t]*\\([+*-]\\)\\s-" 1 'my/org-bullet prepend))
+   '(("^[ \t]*\\([+*-]\\)\\s-" 1 'org-bullet-reface prepend))
    'append))
 
 (defun setup-org-mode ()
@@ -462,7 +459,7 @@ but reset any face remapping applied elsewhere."
  org-use-sub-superscripts '{}
  )
 
-(defface my/org-bullet
+(defface org-bullet-reface
   '((t :foreground "#5FAFFF"))
   "Face for all org-modern list bullets.")
 
@@ -688,6 +685,14 @@ but reset any face remapping applied elsewhere."
 
 (remove-hook 'org-present-mode-hook 'spacemacs//org-present-start)
 
+(defun fix-variable-pitch ()
+  (solaire-mode 0)
+  (pretty-print)
+  (variable-pitch-mode)
+  (setq-local global-hl-line-mode nil)
+  )
+
+(add-hook 'Info-mode-hook #'fix-variable-pitch)
 (add-hook 'markdown-mode-hook #'setup-markdown-mode)
 (add-hook 'help-mode-hook #'pretty-print)
 (add-hook 'lsp-help-mode-hook #'pretty-print)
@@ -1315,22 +1320,22 @@ outright; prepending over its result keeps the chip colors."
                frame 'background-color
                (face-background 'lsp-ui-doc-background frame t)))))
 
-(defun my/vfc-increase ()
+(defun vfc-increase ()
   (interactive)
   (setq visual-fill-column-width (+ visual-fill-column-width 5))
   (when (bound-and-true-p visual-fill-column-mode)
     (visual-fill-column-adjust)))
 
-(defun my/vfc-decrease ()
+(defun vfc-decrease ()
   (interactive)
   (setq visual-fill-column-width (max 20 (- visual-fill-column-width 5)))
   (when (bound-and-true-p visual-fill-column-mode)
     (visual-fill-column-adjust)))
 
-(defhydra my/visual-fill-column-hydra ()
+(defhydra visual-fill-column-transient ()
   "Visual Fill Column"
-  ("[" my/vfc-decrease "decrease")
-  ("]" my/vfc-increase "increase")
+  ("[" vfc-decrease "decrease")
+  ("]" vfc-increase "increase")
   ("q" nil "quit"))
 
 (setq org-enforce-todo-dependencies t)

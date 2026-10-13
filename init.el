@@ -649,7 +649,23 @@ If you are unsure, try setting them in `dotspacemacs/user-config' first."
                         (unless (string-match-p "lisp/org$" path)
                           path))
                       load-path)))
-
+  ;; Emacs 31 + package-quickstart leaves `package-alist' empty, so the
+  ;; install check in `configuration-layer//get-to-install-packages' can't see
+  ;; ELPA copies of built-in packages and reinstalls org/transient every boot.
+  ;; Load just those two descriptors before Spacemacs decides what to install.
+  ;; Safe for orphan deletion: a package absent from `package-alist' can never
+  ;; be an orphan candidate, and these two are always in the used list.
+  ;; If `package-alist' is already populated here, upstream fixed it: remove this.
+  (advice-add 'configuration-layer//install-packages :before
+              (lambda (&rest _)
+                (if package-alist
+                    (display-warning
+                     'dotspacemacs
+                     "`package-alist' is populated at install time; the org/transient quickstart workaround in init.el is obsolete and can be removed")
+                  (dolist (dir (directory-files package-user-dir t
+                                                "\\`\\(?:org\\|transient\\)-[0-9]"))
+                    (when (file-directory-p dir)
+                      (package-load-descriptor dir))))))
   )
 
 (defun dotspacemacs/user-config ()
