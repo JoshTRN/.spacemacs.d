@@ -11,6 +11,12 @@ triage queue and quick actions.  Its buffer starts in emacs state so
 the package's single-key bindings (~c~, ~g~, ~f~, ~K~, ~?~ ...) work
 untouched by evil.
 
+Also ships =agent-shell-hq= (GitHub-only, installed via a layer
+recipe): a heads-up display for juggling many sessions — a dedicated
+perspective with a sidebar grouping sessions by project (=SPC a a h=),
+plus a posframe peek overlay (=SPC a a P=) and LLM-generated session
+labels.
+
 Buffer-level styling (fenced tool output with language detection,
 variable-pitch prose) lives in =config.el= under the AGENT-SHELL
 heading, not here — it advises package internals and is easier to
@@ -39,5 +45,7 @@ Add =agent-shell= to =dotspacemacs-configuration-layers= (via
 | ~SPC a a r~   | Send the active region                             |
 | ~SPC a a f~   | Send the current file                              |
 | ~SPC a a d~   | Open the sessions dashboard                        |
+| ~SPC a a h~   | Toggle the HQ workspace (sidebar + perspective)    |
+| ~SPC a a P~   | Peek at all sessions in a posframe overlay         |
 
 Agent-specific starters are bound in the host-local config.

@@ -30,7 +30,9 @@
 (defconst agent-shell-packages
   '(agent-shell
     (agent-shell-dashboard :location (recipe :fetcher github
-                                             :repo "wandersoncferreira/agent-shell-dashboard")))
+                                             :repo "wandersoncferreira/agent-shell-dashboard"))
+    (agent-shell-hq :location (recipe :fetcher github
+                                      :repo "sreenivasvrao/agent-shell-hq")))
   "The list of Lisp packages required by the agent-shell layer.")
 
 (defun agent-shell/init-agent-shell ()
@@ -92,7 +94,35 @@
           (evil-local-set-key state (kbd "?") #'agent-shell-help-menu))
         (evil-local-set-key 'visual (kbd ">")
                             #'agent-shell-quote-or-shift-right)))
-    (add-hook 'agent-shell-mode-hook #'agent-shell-evil-local-keys)))
+    (add-hook 'agent-shell-mode-hook #'agent-shell-evil-local-keys)
+    ;; shell-maker resolves a shell's process from its buffer name, so
+    ;; renames must go through `shell-maker-set-buffer-name' (a bare
+    ;; `rename-buffer' detaches the session); keep any viewport buffer
+    ;; in step too.
+    (defun agent-shell-rename-session-buffer (buf name)
+      "Rename shell BUF to NAME, dragging its viewport buffer along."
+      (let ((viewport (get-buffer (concat (buffer-name buf) " [viewport]"))))
+        (shell-maker-set-buffer-name buf name)
+        (when (buffer-live-p viewport)
+          (with-current-buffer viewport
+            (rename-buffer (concat name " [viewport]") t)))))
+    (defun agent-shell-name-buffer-after-first-prompt ()
+      "Rename this session's buffer from its first submitted prompt."
+      (agent-shell-subscribe-to
+       :shell-buffer (current-buffer)
+       :event 'input-submitted
+       :on-event
+       (lambda (event)
+         ;; `input-submitted' is emitted before `agent-shell--send-command'
+         ;; seeds the session title, so a nil title marks the first prompt.
+         (unless (map-nested-elt agent-shell--state '(:session :title))
+           (when-let* ((prompt (map-nested-elt event '(:data :prompt)))
+                       (line (car (split-string prompt "\n" t "[ \t]+"))))
+             (agent-shell-rename-session-buffer
+              (current-buffer)
+              (truncate-string-to-width line 48 nil nil "…")))))))
+    (add-hook 'agent-shell-mode-hook
+              #'agent-shell-name-buffer-after-first-prompt)))
 
 (defun agent-shell/init-agent-shell-dashboard ()
   (use-package agent-shell-dashboard
@@ -151,3 +181,41 @@ Falls back to the prompting default when no known config matches."
           (apply orig args))))
     (advice-add 'agent-shell-dashboard--transcript-dirs :around
                 #'agent-shell-dashboard-skip-remote-roots)))
+
+(defun agent-shell/init-agent-shell-hq ()
+  (use-package agent-shell-hq
+    :commands (agent-shell-hq-toggle
+               agent-shell-hq-toggle-jump-to-sidebar
+               agent-shell-hq-peek
+               agent-shell-hq-label)
+    :init
+    (spacemacs/set-leader-keys
+      "aah" 'agent-shell-hq-toggle
+      "aaP" 'agent-shell-hq-peek)
+    ;; The sidebar/peek buffers are fundamental-mode with their own
+    ;; single-key local maps; with no major mode to hang
+    ;; `evil-set-initial-state' on, match the buffer names instead.
+    (with-eval-after-load 'evil
+      (add-to-list 'evil-buffer-regexps '("\\` \\*agent-shell-hq-" . emacs)))
+    :config
+    ;; Emacs state keeps evil off these buffers but also loses the SPC
+    ;; leader; the package maps never bind SPC, so hang the leader map
+    ;; off it directly (SPC w l etc. keep working).
+    (define-key agent-shell-hq-toggle-map (kbd "SPC") spacemacs-default-map)
+    (define-key agent-shell-hq-peek-map (kbd "SPC") spacemacs-default-map)
+    ;; Joshua prefers a plain rename over the package's LLM titler, so
+    ;; override `agent-shell-hq-label' (r / R in the sidebar) wholesale.
+    (defun agent-shell-hq-rename (&optional shell-buf)
+      "Prompt for a new name for SHELL-BUF (or the current shell)."
+      (interactive)
+      (let* ((buf (or shell-buf
+                      (agent-shell--shell-buffer :no-create t :no-error t)
+                      (user-error "No agent-shell buffer found")))
+             (name (string-trim
+                    (read-string "Rename session: " (buffer-name buf)))))
+        (unless (or (string-empty-p name)
+                    (string= name (buffer-name buf)))
+          (agent-shell-rename-session-buffer buf name)
+          (when (get-buffer-window " *agent-shell-hq-sidebar*")
+            (agent-shell-hq-toggle-refresh)))))
+    (advice-add 'agent-shell-hq-label :override #'agent-shell-hq-rename)))
