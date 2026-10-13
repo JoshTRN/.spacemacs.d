@@ -225,7 +225,11 @@ RESUME is passed through to Helm's own-frame display function."
               ;; (+ N) is absolute even for monitors with negative coordinates.
               (modify-frame-parameters frame `((left + ,left) (top + ,top)))
               frame))))
-    (helm-display-buffer-in-own-frame buffer resume)))
+    (helm-display-buffer-in-own-frame buffer resume)
+    ;; Helm chooses input placement from the original cursor's screen position.
+    ;; Override it before minibuffer setup so centered frames always use the top.
+    (with-current-buffer buffer
+      (setq-local helm-echo-input-in-header-line t))))
 
 ;; Retire both previous display paths when reloading a running session.
 (remove-hook 'helm-floating-frame-after-display-functions
