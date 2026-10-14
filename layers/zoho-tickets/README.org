@@ -20,7 +20,8 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
   - Inline images in incoming emails are fetched through the API
     in the background and displayed in place in the ticket buffer
     (=zoho-desk-inline-images=, scaled to
-    =zoho-desk-inline-image-max-width= pixels)
+    =zoho-desk-inline-image-max-width= pixels; pasted images in
+    the reply are capped to the same width)
   - Outgoing replies send images *truly inline* (real cid MIME
     parts, not attachments): pasted screenshots via the composer
     servlet (=zoho-desk-send-inline-images=; needs the browser
@@ -122,7 +123,7 @@ tickets on ~SPC a z t~ (the =zoho-projects= layer sits next door on
 |---------------+--------------------------------------------|
 | ~SPC a z t d~ | Open the dashboard                         |
 | ~SPC a z t u~ | Open a ticket from its URL (auto-switches department) |
-| ~SPC a z t f~ | Quickfind: full ticket number jumps, else helm fuzzy find |
+| ~SPC a z t f~ | Quickfind: full ticket number or ticket URL jumps, else helm fuzzy find |
 | ~SPC a z t a~ | One-time OAuth grant-code exchange         |
 | ~SPC a z t t~ | Add a time entry to a ticket               |
 | ~SPC a z t s~ | Set a ticket's status (picklist from the API) |

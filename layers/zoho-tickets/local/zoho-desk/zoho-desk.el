@@ -1733,8 +1733,9 @@ URL is read from the minibuffer, prefilled from the kill ring
 when the newest kill looks like a ticket URL.  The agent-console
 form (…/agent/<portal>/<department>/tickets/details/<id>) names
 its department directly; any other URL carrying the ticket's long
-numeric id works too, at the cost of one extra lookup to learn
-the department from the ticket itself."
+numeric id — the one.zoho.com embedding of the console included —
+works too, at the cost of one extra lookup to learn the
+department from the ticket itself."
   (interactive
    (list (read-string "Zoho ticket URL: "
                       (zoho-desk--ticket-url-in-kill-ring)
@@ -1853,17 +1854,23 @@ pages; CALLBACK gets (TICKETS ERR)."
 
 ;;;###autoload
 (defun zoho-desk-quickfind (query)
-  "Jump straight to a ticket by number, or helm-fuzzy-find one.
+  "Jump straight to a ticket by number or URL, or helm-fuzzy-find one.
 A QUERY of the whole-ticket-number form (\"#ART-364\", \"ART-364\"
 or \"#364\") opens that ticket directly, switching departments to
-the ticket's own when needed.  Any other QUERY — including none —
-prompts for a department and fuzzy-finds over its newest
-`zoho-desk-quickfind-limit' tickets, with QUERY as the initial
-helm pattern."
-  (interactive "sTicket (#ART-364 jumps, anything else fuzzy-finds): ")
+the ticket's own when needed.  A ticket URL — the Desk agent
+console or its one.zoho.com embedding, anything carrying the
+ticket id — jumps the same way via `zoho-desk-open-ticket-url'.
+Any other QUERY — including none — prompts for a department and
+fuzzy-finds over its newest `zoho-desk-quickfind-limit' tickets,
+with QUERY as the initial helm pattern."
+  (interactive "sTicket (#ART-364 or URL jumps, anything else fuzzy-finds): ")
   (let ((query (string-trim query)))
-    (if (string-match-p "\\`\\(?:#?[A-Za-z]+-[0-9]+\\|#[0-9]+\\)\\'" query)
-        (zoho-desk--jump-to-ticket-number (string-remove-prefix "#" query))
+    (cond
+     ((string-match-p "\\`https?://" query)
+      (zoho-desk-open-ticket-url query))
+     ((string-match-p "\\`\\(?:#?[A-Za-z]+-[0-9]+\\|#[0-9]+\\)\\'" query)
+      (zoho-desk--jump-to-ticket-number (string-remove-prefix "#" query)))
+     (t
       (let* ((departments (zoho-desk--ensure-departments))
              (current-id (format "%s" (or zoho-desk-department-id
                                           zoho-desk--department
@@ -1891,7 +1898,7 @@ helm pattern."
             ;; helm runs its own minibuffer loop; don't start it from
             ;; inside the url.el sentinel.
             (t (run-at-time 0 nil #'zoho-desk--quickfind-helm tickets
-                            (unless (string-empty-p query) query))))))))))
+                            (unless (string-empty-p query) query)))))))))))
 
 ;;;; Dashboard layout
 
@@ -2585,7 +2592,10 @@ so the lines appear once `zoho-desk--ticket-fields' is primed
   "Tone down prose-oriented styling that hurts ticket buffers.
 Org heading sizes are kept as configured; only the 4x header-line
 remap is replaced so the tab bar stays readable, and
-trailing-whitespace highlighting is turned off."
+trailing-whitespace highlighting is turned off.  Images pasted
+into the reply render through `org-display-inline-images', so cap
+them at the same width as the thread images."
+  (setq-local org-image-max-width zoho-desk-inline-image-max-width)
   (setq-local face-remapping-alist
               (assq-delete-all 'header-line
                                (copy-alist face-remapping-alist)))
