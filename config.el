@@ -1251,33 +1251,29 @@ outright; prepending over its result keeps the chip colors."
 
   (org-modern-log "--- Checking org-modern date/time fallback logic ---")
 
-  ;; DATE ACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-date-active)
     (org-modern-log "Applying fallback: org-modern-date-active")
     (custom-set-faces
      '(org-modern-date-active
-       ((t (:foreground "gray85" :background "gray20"))))))
+       ((t (:foreground "#1696c1" :background "#163244"))))))
 
-  ;; DATE INACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-date-inactive)
     (org-modern-log "Applying fallback: org-modern-date-inactive")
     (custom-set-faces
      '(org-modern-date-inactive
-       ((t (:foreground "gray70" :background "gray20"))))))
+       ((t (:foreground "#106e8d" :background "#162736"))))))
 
-  ;; TIME ACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-time-active)
     (org-modern-log "Applying fallback: org-modern-time-active")
     (custom-set-faces
      '(org-modern-time-active
-       ((t (:foreground "gray85" :background "gray20"))))))
+       ((t (:foreground "#1696c1" :background "#163244"))))))
 
-  ;; TIME INACTIVE
   (unless (face-defined-by-theme-or-user-p 'org-modern-time-inactive)
     (org-modern-log "Applying fallback: org-modern-time-inactive")
     (custom-set-faces
      '(org-modern-time-inactive
-       ((t (:foreground "gray70" :background "gray20")))))))
+       ((t (:foreground "#106e8d" :background "#162736")))))))
 
 (advice-add 'groovy-mode :after (lambda (&rest _) (tree-sitter-hl-mode -1)))
 
