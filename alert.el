@@ -88,7 +88,7 @@ Respects `alert-enabled`."
 
   (setq alert-priority-icons
         '(("A" . ("⚡" . "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AlertStopIcon.icns"))
-          ("B" . ("🛠" . "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarCustomizeIcon.icns"))
+          ("B" . ("⚒️" . "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarCustomizeIcon.icns"))
           ("C" . ("🎈" . "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/Clock.icns"))
           (nil . (""   . "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarInfo.icns"))))
 
@@ -122,7 +122,7 @@ Respects `alert-enabled`."
 
   (setq alert-priority-icons
         '(("A" . ("⚡" . "dialog-error"))
-          ("B" . ("🛠" . "applications-system"))
+          ("B" . ("⚒️" . "applications-system"))
           ("C" . ("🎈" . "alarm"))
           (nil . (""   . "dialog-information"))))
 
@@ -138,12 +138,6 @@ Respects `alert-enabled`."
         (lambda (title msg icon)
           (apply #'call-process "notify-send" nil 0 nil
                  (delq nil (list "-i" icon title msg))))))
-
-;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;;                      FUTURE: WINDOWS BACKEND
-;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; Could be added here with PowerShell `New-BurntToastNotification`
-;; or `msg.exe`.
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;;                             MAIN LOGIC
