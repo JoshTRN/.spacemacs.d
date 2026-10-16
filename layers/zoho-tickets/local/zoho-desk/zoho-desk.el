@@ -84,6 +84,7 @@
 (declare-function org-fold-hide-subtree "org-fold")
 (declare-function outline-hide-subtree "outline")
 (declare-function org-display-inline-images "org")
+(declare-function org-link-set-parameters "ol")
 (declare-function org-export-string-as "ox")
 (declare-function evil-set-initial-state "evil-core")
 (declare-function evil-define-key* "evil-core")
@@ -1974,6 +1975,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z l") #'zoho-desk-submit-time-log)
     (define-key map (kbd "C-c z a") #'zoho-desk-add-email)
     (define-key map (kbd "C-c z i") #'zoho-desk-insert-image)
+    (define-key map (kbd "C-c z A") #'zoho-desk-attach-file)
     (define-key map (kbd "C-c z k") #'zoho-desk-refresh-session-cookie)
     (define-key map (kbd "C-c z e") #'zoho-desk-expand-thread-at-point)
     (define-key map (kbd "C-c z c") #'zoho-desk-add-comment)
@@ -3459,15 +3461,85 @@ payload, which attaches the file to that reply's thread."
           :raw-payload body
           :content-type (concat "multipart/form-data; boundary=" boundary))))
 
-(defun zoho-desk--reply-image-files (org-text)
-  "Return existing files referenced as [[file:...]] links in ORG-TEXT."
+(defconst zoho-desk--reply-file-link-re
+  "\\[\\[file:\\([^][]+\\)\\]\\(?:\\[[^][]*\\]\\)?\\]"
+  "Org file link in a reply, with or without a description.")
+
+(defconst zoho-desk--reply-attach-link-re
+  "\\[\\[attach:\\([^][]+\\)\\]\\(?:\\[[^][]*\\]\\)?\\]"
+  "Org link inserted by `zoho-desk-attach-file'.")
+
+(defconst zoho-desk--image-extension-re
+  "\\.\\(?:png\\|jpe?g\\|gif\\|webp\\)\\'"
+  "File-name suffix of the image types the reply pipeline embeds.")
+
+(defun zoho-desk--reply-link-files (regexp org-text)
+  "Return the files captured by REGEXP's first group in ORG-TEXT."
   (let ((start 0) files)
-    (while (string-match "\\[\\[file:\\([^]]+\\)\\]" org-text start)
+    (while (string-match regexp org-text start)
       (setq start (match-end 0))
-      (let ((file (expand-file-name (match-string 1 org-text))))
-        (when (file-exists-p file)
-          (push file files))))
+      (push (expand-file-name (match-string 1 org-text)) files))
     (delete-dups (nreverse files))))
+
+(defun zoho-desk--reply-image-files (org-text)
+  "Return existing image files behind [[file:...]] links in ORG-TEXT.
+Non-image file links ride along as plain attachments instead (see
+`zoho-desk--reply-attachment-files')."
+  (seq-filter (lambda (file)
+                (and (string-match-p zoho-desk--image-extension-re file)
+                     (file-exists-p file)))
+              (zoho-desk--reply-link-files zoho-desk--reply-file-link-re
+                                           org-text)))
+
+(defun zoho-desk--reply-attachment-files (org-text)
+  "Return the files sent as plain attachments of the reply in ORG-TEXT.
+[[attach:...]] links always attach — a missing target aborts the
+send.  [[file:...]] links attach when the target exists and is not
+an image (images go through the inline/embed pipeline instead)."
+  (let ((attached (zoho-desk--reply-link-files
+                   zoho-desk--reply-attach-link-re org-text)))
+    (dolist (file attached)
+      (unless (file-exists-p file)
+        (user-error "Zoho Desk: attachment %s does not exist — reply not sent"
+                    file)))
+    (delete-dups
+     (append
+      attached
+      (seq-filter (lambda (file)
+                    (and (not (string-match-p zoho-desk--image-extension-re
+                                              file))
+                         (file-exists-p file)))
+                  (zoho-desk--reply-link-files zoho-desk--reply-file-link-re
+                                               org-text))))))
+
+(defun zoho-desk--strip-attachment-links (org-text)
+  "Replace attachment links in ORG-TEXT with [file: ... -- attached] markers.
+Covers attach: links and existing non-image file: links — their
+targets go out as attachments of the reply, so the links would be
+dead in the recipient's mail.  Image file: links stay for
+`zoho-desk--org-to-html' to embed."
+  (let ((marker (lambda (file)
+                  (format "[file: %s — attached]"
+                          (file-name-nondirectory file)))))
+    (setq org-text
+          (replace-regexp-in-string
+           zoho-desk--reply-attach-link-re
+           (lambda (link)
+             (save-match-data
+               (string-match zoho-desk--reply-attach-link-re link)
+               (funcall marker (match-string 1 link))))
+           org-text t t))
+    (replace-regexp-in-string
+     zoho-desk--reply-file-link-re
+     (lambda (link)
+       (save-match-data
+         (string-match zoho-desk--reply-file-link-re link)
+         (let ((file (expand-file-name (match-string 1 link))))
+           (if (or (string-match-p zoho-desk--image-extension-re file)
+                   (not (file-exists-p file)))
+               link
+             (funcall marker file)))))
+     org-text t t)))
 
 (defun zoho-desk--signature-image-files ()
   "Return existing files behind file:// <img> tags in the HTML signature."
@@ -3732,6 +3804,18 @@ body becomes an \"[image: ...]\" marker."
     (when (fboundp 'org-display-inline-images)
       (org-display-inline-images nil t))))
 
+(defun zoho-desk-attach-file (file)
+  "Attach FILE to the reply at point, without embedding it.
+The link shows as the file name in the Reply section; on send the
+file is uploaded as a plain attachment of the reply and the link
+becomes a \"[file: ...]\" marker in the body.  Images attach as
+files too — `zoho-desk-insert-image' embeds one inline instead."
+  (interactive "fAttach file: ")
+  (org-link-set-parameters "attach" :follow #'find-file)
+  (insert (format "[[attach:%s][%s]]\n"
+                  (expand-file-name file)
+                  (file-name-nondirectory file))))
+
 (defun zoho-desk-send-reply ()
   "Send the Reply section of this ticket buffer as an email reply.
 The address on the Reply section's To line is used as-is — edit it
@@ -3739,7 +3823,8 @@ inline (it is prefilled with the latest inbound sender; any
 address works, so a test mail to yourself does too).  When the To
 line is blank, prompts with the ticket's known addresses instead.
 With `zoho-desk-reply-html' the org text is exported to HTML and
-image links are embedded and attached."
+image links are embedded and attached.  attach: links and
+non-image file: links go out as plain attachments."
   (interactive)
   (unless zoho-desk--ticket (user-error "Not in a ticket buffer"))
   (let* ((body (zoho-desk--reply-body))
@@ -3782,6 +3867,7 @@ image links are embedded and attached."
                     choice))))
       (let* ((buf (current-buffer))
              (ticket-number (alist-get 'ticketNumber zoho-desk--ticket))
+             (attachment-files (zoho-desk--reply-attachment-files body))
              (image-files (and zoho-desk-reply-html
                                (delete-dups
                                 (append
@@ -3796,6 +3882,7 @@ image links are embedded and attached."
              (images (or inline-urls
                          (mapcar (lambda (file) (cons file nil))
                                  image-files)))
+             (body (zoho-desk--strip-attachment-links body))
              (send
               (lambda (upload-ids)
                 (zoho-desk--request-async
@@ -3835,22 +3922,23 @@ image links are embedded and attached."
                            (when upload-ids
                              `(("uploads" . ,upload-ids))))))))
         (message "Sending reply to %s…" to)
-        (if (or (null image-files) inline-urls)
-            ;; No images, or all of them inlined — nothing to attach.
-            (funcall send nil)
-          (zoho-desk--request-all-async
-           (mapcar #'zoho-desk--upload-spec image-files)
-           (lambda (responses err)
-             (let ((ids (mapcar (lambda (r) (alist-get 'id r)) responses)))
-               (cond
-                (err (zoho-desk--announce-write-failure
-                      "image upload" err buf))
-                ((memq nil ids)
-                 (zoho-desk--announce-write-failure
-                  "image upload" "no upload id in response" buf))
-                (t (funcall send
-                            (mapcar (lambda (id) (format "%s" id))
-                                    ids))))))))))))
+        (let ((upload-files (append (and (not inline-urls) image-files)
+                                    attachment-files)))
+          (if (null upload-files)
+              (funcall send nil)
+            (zoho-desk--request-all-async
+             (mapcar #'zoho-desk--upload-spec upload-files)
+             (lambda (responses err)
+               (let ((ids (mapcar (lambda (r) (alist-get 'id r)) responses)))
+                 (cond
+                  (err (zoho-desk--announce-write-failure
+                        "attachment upload" err buf))
+                  ((memq nil ids)
+                   (zoho-desk--announce-write-failure
+                    "attachment upload" "no upload id in response" buf))
+                  (t (funcall send
+                              (mapcar (lambda (id) (format "%s" id))
+                                      ids)))))))))))))
 
 ;;;; Agent mentions
 

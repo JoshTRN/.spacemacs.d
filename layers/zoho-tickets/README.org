@@ -182,6 +182,7 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, y~      | ~C-c z y~    | Copy agent-console ticket URL            |
 | ~, #~      | ~C-c z #~    | Copy ticket number (=#ART-364= form)     |
 | ~, a~      | ~C-c z a~    | Add org contact email to the To line     |
+| ~, i a~    | ~C-c z A~    | Attach a file to the reply (not inline)  |
 | ~, i e~    | ~C-c z i~    | Insert clipboard image into the reply    |
 | ~, i k~    | ~C-c z k~    | Refresh the inline-image session cookie  |
 | ~, b~      | ~C-c z o~    | Open in browser                          |

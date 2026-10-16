@@ -125,7 +125,7 @@ Each entry is either:
     ;; Ticket documents are org-mode; the zoho commands ride the
     ;; minor-mode leader so org's own leader keys stay available.
     (spacemacs/declare-prefix-for-minor-mode 'zoho-desk-ticket-minor-mode
-      "g" "go to")
+                                             "g" "go to")
     (spacemacs/set-leader-keys-for-minor-mode 'zoho-desk-ticket-minor-mode
       "1" 'zoho-desk-tab-overview
       "2" 'zoho-desk-tab-thread
@@ -140,7 +140,8 @@ Each entry is either:
       "l" 'zoho-desk-submit-time-log
       "." 'zoho-desk-pick-executed-time
       "a" 'zoho-desk-add-email
-      "ie" 'zoho-desk-insert-image
+      "ia" 'zoho-desk-attach-file
+      "ii" 'zoho-desk-insert-image
       "ik" 'zoho-desk-refresh-session-cookie
       "c" 'zoho-desk-add-comment
       "m" 'zoho-desk-submit-comment
