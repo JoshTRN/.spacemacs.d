@@ -2,6 +2,7 @@
 (setq
  custom-layers
  '(
+   alert
    (auto-completion :variables auto-completion-enable-snippets-in-popup t)
    better-defaults
    clojure

@@ -1,0 +1,18 @@
+#+TITLE: alert layer
+
+A Spacemacs layer wrapping a cross-platform alert backend. It provides a unified API for sending desktop notifications: =osascript= dialogs on macOS, =notify-send= on Linux. Consumers should only use =alert-dispatch= and =alert-priority->icon=.
+
+#+begin_src emacs-lisp
+(alert-dispatch "Break" "Time to stretch!" nil "+10 min")
+#+end_src
+
+* Commands
+
+| Command              | Description                                             |
+|----------------------+---------------------------------------------------------|
+| ~alert-schedule~     | prompt for message/time (=HH:MM= or =+N min=) and schedule |
+| ~alert-now~          | fire an alert immediately                               |
+| ~alert-now-snooze~   | fire an alert immediately with a snooze button          |
+| ~alert-toggle~       | toggle alerts globally (also ~alert-enable~ / ~alert-disable~) |
+
+=alert-enabled-mode= is the global minor mode behind the toggle; the interactive scheduling commands refuse to run while it is off, and =alert-dispatch= is silenced via =alert-enabled=.

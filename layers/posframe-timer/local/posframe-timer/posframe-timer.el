@@ -58,7 +58,7 @@
 (declare-function posframe-delete "posframe")
 (declare-function posframe-delete-frame "posframe")
 (declare-function posframe-workable-p "posframe")
-(declare-function alert "alert")
+(declare-function alert-dispatch "alert")
 (declare-function org-clocking-p "org-clock")
 (declare-function org-clock-find-position "org-clock" (find-unclosed))
 (declare-function org-time-stamp-format "org" (&optional with-time inactive))
@@ -506,10 +506,10 @@ skips repositioning while its cached coordinates still look right."
         posframe-timer--end-time nil)
   (run-hooks 'posframe-timer-finished-hook)
   (if (require 'alert nil t)
-      (alert (format-message "Timer finished (%s)"
-                             (posframe-timer--format-duration
-                              posframe-timer--duration))
-             :title "posframe-timer" :severity 'high)
+      (alert-dispatch "posframe-timer"
+                      (format-message "Timer finished (%s)"
+                                      (posframe-timer--format-duration
+                                       posframe-timer--duration)))
     (message "posframe-timer: time's up!"))
   (ding))
 

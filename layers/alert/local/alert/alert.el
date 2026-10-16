@@ -205,4 +205,5 @@ If called interactively, prompts for TITLE and MSG."
     (let ((snooze (or snooze-str alert-default-snooze)))
       (alert-dispatch title msg (or icon alert-default-icon) snooze))))
 
+(provide 'alert)
 ;;; alert.el ends here
