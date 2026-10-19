@@ -276,6 +276,10 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
  persp-auto-save-opt 0
  )
 
+;; the startup lists no longer include recents, so nothing loads recentf
+;; before spacemacs' idle save timer clobbers the cache with an empty list
+(recentf-mode)
+
 (spacemacs/declare-prefix "oi" "Insert")
 (spacemacs/set-leader-keys "oh" #'host-config-file)
 (spacemacs/set-leader-keys "oih" #'insert-comment-heading)

@@ -73,6 +73,7 @@ Each entry is either:
   (use-package zoho-desk
     :commands (zoho-desk-dashboard
                zoho-desk-tickets
+               zoho-desk-home-refresh-unread
                zoho-desk-open-ticket-url
                zoho-desk-quickfind
                zoho-desk-authorize
@@ -84,6 +85,14 @@ Each entry is either:
                zoho-desk-finish-ticket-timer
                zoho-desk-cancel-ticket-timer)
     :init
+    ;; boundp: honor an os/host setq of the flag without loading the package
+    (add-hook 'emacs-startup-hook
+              (lambda ()
+                (when (if (boundp 'zoho-desk-home-unread-tickets)
+                          zoho-desk-home-unread-tickets
+                        t)
+                  (zoho-desk-home-refresh-unread)))
+              90)
     (spacemacs/declare-prefix "az" "zoho")
     (spacemacs/declare-prefix "azt" "tickets")
     (spacemacs/set-leader-keys
@@ -106,13 +115,16 @@ Each entry is either:
       "d" 'zoho-desk-select-department
       "s" 'zoho-desk-toggle-sidebar
       "q" 'zoho-desk-quit)
+    (spacemacs/declare-prefix-for-mode 'zoho-desk-tickets-mode "mc" "clock")
     (spacemacs/set-leader-keys-for-major-mode 'zoho-desk-tickets-mode
       "o" 'zoho-desk-open-ticket-at-point
       "r" 'zoho-desk-refresh-table
       "n" 'zoho-desk-next-page
       "p" 'zoho-desk-previous-page
       "t" 'zoho-desk-add-time-entry
-      "T" 'zoho-desk-start-ticket-timer
+      "ci" 'zoho-desk-start-ticket-timer
+      "co" 'zoho-desk-finish-ticket-timer
+      "ck" 'zoho-desk-cancel-ticket-timer
       "u" 'zoho-desk-set-status
       "f" 'zoho-desk-set-field
       "w" 'zoho-desk-copy-org-snippet
@@ -126,6 +138,8 @@ Each entry is either:
     ;; minor-mode leader so org's own leader keys stay available.
     (spacemacs/declare-prefix-for-minor-mode 'zoho-desk-ticket-minor-mode
                                              "g" "go to")
+    (spacemacs/declare-prefix-for-minor-mode 'zoho-desk-ticket-minor-mode
+                                             "c" "clock")
     (spacemacs/set-leader-keys-for-minor-mode 'zoho-desk-ticket-minor-mode
       "1" 'zoho-desk-tab-overview
       "2" 'zoho-desk-tab-thread
@@ -135,6 +149,7 @@ Each entry is either:
       "ge" 'zoho-desk-tab-thread
       "gc" 'zoho-desk-tab-comments
       "gl" 'zoho-desk-tab-time-logs
+      "gw" 'zoho-desk-browse-ticket
       "e" 'zoho-desk-expand-thread-at-point
       "s" 'zoho-desk-send-reply
       "l" 'zoho-desk-submit-time-log
@@ -143,10 +158,12 @@ Each entry is either:
       "ia" 'zoho-desk-attach-file
       "ii" 'zoho-desk-insert-image
       "ik" 'zoho-desk-refresh-session-cookie
-      "c" 'zoho-desk-add-comment
+      "C" 'zoho-desk-add-comment
       "m" 'zoho-desk-submit-comment
       "t" 'zoho-desk-add-time-entry
-      "T" 'zoho-desk-start-ticket-timer
+      "ci" 'zoho-desk-start-ticket-timer
+      "co" 'zoho-desk-finish-ticket-timer
+      "ck" 'zoho-desk-cancel-ticket-timer
       "u" 'zoho-desk-set-status
       "f" 'zoho-desk-set-field
       "r" 'zoho-desk-refresh-ticket

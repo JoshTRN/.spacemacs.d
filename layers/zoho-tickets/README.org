@@ -109,6 +109,17 @@ deleting the Self Client (which kills all its tokens).
 - =zoho-desk-sidebar-width= :: width of the views pane.
 - =zoho-desk-thread-prefetch= :: how many of the newest emails are
   fetched in full when a ticket opens (older ones load on demand).
+- =zoho-desk-home-unread-tickets= :: on by default; lists unread tickets
+  on the Spacemacs home buffer (jump with ~u~, entries open the ticket).
+  Fetched in the background at startup and refetched by ~SPC b h~. Opt
+  out per machine with a =setq= to nil in =os/<system-type>.el= or the
+  host config — that works without loading the package.
+  =zoho-desk-home-unread-limit= caps the list (10).
+- =zoho-desk-home-unread-views= :: (DEPARTMENT . VIEW) pairs the unread
+  scan covers, matched case-insensitively by name (or exactly by id) and
+  spanning any number of departments. Defaults to
+  =(("Arthrex" . "Unclosed"))=. When nil the scan falls back to the
+  dashboard's selected views in the session department.
 
 Sidebar counts show how many tickets have been fetched for a view
 (=50+= means a full page — the API has no per-view total).
@@ -173,9 +184,11 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, l~      | ~C-c z l~    | Post the New Time Log section            |
 | ~, .~      | ~C-c .~      | Org date picker for the Executed / End fields |
 |            | ~M-n~ / ~M-p~ | Next / previous input field              |
-| ~, c~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
+| ~, C~      | ~C-c z c~    | Compose comment (~, s~ posts, ~, k~ aborts) |
 | ~, t~      | ~C-c z t~    | Add time entry                           |
-| ~, T~      | ~C-c z T~    | Start the ticket timer on this ticket    |
+| ~, c i~    | ~C-c z T~    | Clock in: start the ticket timer         |
+| ~, c o~    |              | Clock out: finish timer → fill New Time Log |
+| ~, c k~    |              | Cancel the ticket timer                  |
 | ~, u~      | ~C-c z u~    | Set the ticket's status                  |
 | ~, f~      | ~C-c z f~    | Set a ticket field (custom fields too)   |
 | ~, w~      | ~C-c z w~    | Copy org heading with ZOHO_TICKET_ID     |
@@ -185,13 +198,13 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, i a~    | ~C-c z A~    | Attach a file to the reply (not inline)  |
 | ~, i e~    | ~C-c z i~    | Insert clipboard image into the reply    |
 | ~, i k~    | ~C-c z k~    | Refresh the inline-image session cookie  |
-| ~, b~      | ~C-c z o~    | Open in browser                          |
+| ~, g w~ / ~, b~ | ~C-c z o~ | Open in browser                       |
 | ~, r~      | ~C-c z g~    | Refresh ticket                           |
 
 The dashboard panes have leader keys too: sidebar ~, t~ toggle /
 ~, r~ refresh / ~, d~ department / ~, q~ quit; table ~, o~ open /
-~, n~ / ~, p~ pages / ~, t~ time / ~, w~ snippet / ~, y~ url /
-~, #~ number / ~, b~ browser.
+~, n~ / ~, p~ pages / ~, t~ time / ~, c i/o/k~ clock /
+~, w~ snippet / ~, y~ url / ~, #~ number / ~, b~ browser.
 
 Replies: the Email Thread section lists emails newest-first, with a
 =** Reply= subheading at the top — everything under that subheading

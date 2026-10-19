@@ -1241,6 +1241,12 @@ will come back.  Empty when no signature applies."
 (defvar zoho-desk--ticket-buffer nil
   "Single buffer reused for ticket details, renamed per ticket.")
 
+(defvar zoho-desk--home-unread nil
+  "Unread tickets shown on the home buffer, newest change first.")
+
+(defvar zoho-desk--home-unread-generation 0
+  "Bumped per unread fetch so a stale response cannot win.")
+
 (defun zoho-desk--starred-position (view)
   "Return VIEW's position in `zoho-desk-starred-view-names', or nil."
   (seq-position (mapcar #'downcase zoho-desk-starred-view-names)
@@ -1500,7 +1506,15 @@ immediately rather than waiting for a refetch."
               (setf (cadr entry) (cadr (zoho-desk--ticket-entry ticket)))
               (setq changed t))))
         (when changed
-          (tabulated-list-print t))))))
+          (tabulated-list-print t)))))
+  (let* ((id (format "%s" ticket-id))
+         (rest (seq-remove
+                (lambda (ticket)
+                  (equal (format "%s" (alist-get 'id ticket)) id))
+                zoho-desk--home-unread)))
+    (unless (eq (length rest) (length zoho-desk--home-unread))
+      (setq zoho-desk--home-unread rest)
+      (zoho-desk--home-redraw))))
 
 (defvar zoho-desk--table-generation 0
   "Bumped per table fetch so a stale response cannot win.")
@@ -4763,6 +4777,267 @@ not its echo) and the duration is computed at submit time."
                       (alist-get 'id ticket)))
     (message "Org heading for #%s copied to kill ring"
              (alist-get 'ticketNumber ticket))))
+
+;;;; Spacemacs home buffer unread section
+
+(defcustom zoho-desk-home-unread-tickets t
+  "When non-nil, list unread tickets on the Spacemacs home buffer.
+The list is fetched in the background at startup from the views in
+`zoho-desk-home-unread-views' and each entry opens its ticket like the
+dashboard table does.  A machine opts out with a plain setq nil in its
+os/<system-type>.el or host config; that sticks even though this
+defcustom loads later."
+  :type 'boolean)
+
+(defcustom zoho-desk-home-unread-views '(("Arthrex" . "Unclosed"))
+  "Department/view pairs scanned for the home buffer's unread tickets.
+Each entry is (DEPARTMENT . VIEW), both matched case-insensitively by
+name or exactly by id, and any number of departments may be listed.
+When nil, the scan falls back to the dashboard's selected views in the
+session department."
+  :type '(alist :key-type string :value-type string))
+
+(defcustom zoho-desk-home-unread-limit 10
+  "Most unread tickets listed on the home buffer."
+  :type 'integer)
+
+(defun zoho-desk--home-unread-configured-p ()
+  "Return non-nil when the OAuth credentials are all available."
+  (and (or zoho-desk-refresh-token (zoho-desk--secret "refresh-token"))
+       (or zoho-desk-client-id (zoho-desk--secret "client-id"))
+       (or zoho-desk-client-secret (zoho-desk--secret "client-secret"))))
+
+(defun zoho-desk--home-redraw ()
+  "Redraw the home buffer so its unread section matches the cache."
+  (when (and (fboundp 'spacemacs-buffer/goto-buffer)
+             (bound-and-true-p spacemacs-initialized)
+             (buffer-live-p (get-buffer spacemacs-buffer-name)))
+    (spacemacs-buffer/goto-buffer t t)))
+
+(defun zoho-desk--home-view-ids (views)
+  "Return the view ids scanned for unread tickets.
+The current selection when there is one, else the default view
+taken from VIEWS (the same \"Open\" fallback the dashboard uses)."
+  (or zoho-desk--selected-view-ids
+      (let ((zoho-desk--views views))
+        (list (alist-get 'id (zoho-desk--default-view))))))
+
+(defvar zoho-desk--home-sources nil
+  "Cons of (CONFIG . SOURCES): `zoho-desk-home-unread-views' as it was
+when it was resolved into (VIEW-ID . DEPARTMENT-ID) scan sources.")
+
+(defun zoho-desk--home-departments-async (callback)
+  "Call CALLBACK with (DEPARTMENTS ERR), fetching and caching if needed."
+  (if zoho-desk--departments
+      (funcall callback zoho-desk--departments nil)
+    (zoho-desk--request-async
+     "GET" "/departments"
+     (lambda (result err)
+       (if err
+           (funcall callback nil err)
+         (funcall callback
+                  (setq zoho-desk--departments (alist-get 'data result))
+                  nil)))
+     :params '(("limit" 50)))))
+
+(defun zoho-desk--home-match-id (key items)
+  "Return the id of the entry in ITEMS whose id or name matches KEY."
+  (let ((key (format "%s" key)))
+    (alist-get 'id
+               (seq-find
+                (lambda (item)
+                  (or (equal (format "%s" (alist-get 'id item)) key)
+                      (string= (downcase (or (alist-get 'name item) ""))
+                               (downcase key))))
+                items))))
+
+(defun zoho-desk--home-resolve-sources (callback)
+  "Resolve `zoho-desk-home-unread-views'; CALLBACK gets (SOURCES ERR).
+SOURCES are (VIEW-ID . DEPARTMENT-ID) conses; entries matching no
+department or view are dropped with a message.  The result is cached
+until the option changes."
+  (if (and zoho-desk--home-sources
+           (equal (car zoho-desk--home-sources) zoho-desk-home-unread-views))
+      (funcall callback (cdr zoho-desk--home-sources) nil)
+    (let ((config zoho-desk-home-unread-views))
+      (zoho-desk--home-departments-async
+       (lambda (departments err)
+         (if err
+             (funcall callback nil err)
+           (let* ((entries
+                   (mapcar
+                    (lambda (entry)
+                      (let ((dept-id (zoho-desk--home-match-id
+                                      (car entry) departments)))
+                        (unless dept-id
+                          (message "Zoho Desk: no department %s" (car entry)))
+                        (list dept-id (car entry) (cdr entry))))
+                    config))
+                  (dept-ids (delete-dups (delq nil (mapcar #'car entries)))))
+             (zoho-desk--request-all-async
+              (mapcar (lambda (dept-id)
+                        `("GET" "/views"
+                          :params (("module" "tickets")
+                                   ("departmentId" ,dept-id)
+                                   ("limit" 100))
+                          :soft-errors t))
+                      dept-ids)
+              (lambda (pages err)
+                (if err
+                    (funcall callback nil err)
+                  (let ((views-by-dept
+                         (cl-mapcar (lambda (dept-id page)
+                                      (cons dept-id (alist-get 'data page)))
+                                    dept-ids pages))
+                        (sources nil))
+                    (pcase-dolist (`(,dept-id ,dept ,view) entries)
+                      (when dept-id
+                        (if-let* ((view-id
+                                   (zoho-desk--home-match-id
+                                    view (cdr (assoc dept-id views-by-dept)))))
+                            (push (cons view-id dept-id) sources)
+                          (message "Zoho Desk: no view %s in department %s"
+                                   view dept))))
+                    (setq zoho-desk--home-sources
+                          (cons config (nreverse sources)))
+                    (funcall callback (cdr zoho-desk--home-sources)
+                             nil))))))))))))
+
+(defun zoho-desk--home-unread-scan (sources generation)
+  "Fetch the first page of each of SOURCES, keeping the unread tickets.
+SOURCES are (VIEW-ID . DEPARTMENT-ID) conses; a nil department falls
+back to the session department.  GENERATION guards against a newer scan
+finishing first."
+  (zoho-desk--request-all-async
+   (mapcar (pcase-lambda (`(,view-id . ,dept-id))
+             `("GET" "/tickets"
+               :params ,(append `(("viewId" ,view-id)
+                                  ("include" "contacts,isRead")
+                                  ("limit" ,zoho-desk-page-size))
+                                (if dept-id
+                                    `(("departmentId" ,dept-id))
+                                  (zoho-desk--department-params)))
+               :soft-errors t))
+           sources)
+   (lambda (pages _err)
+     (when (= generation zoho-desk--home-unread-generation)
+       (let ((seen (make-hash-table :test #'equal))
+             (unread nil))
+         (dolist (page pages)
+           (dolist (ticket (alist-get 'data page))
+             (let ((id (alist-get 'id ticket))
+                   (cell (assq 'isRead ticket)))
+               (when (and cell (not (cdr cell))
+                          (not (gethash id seen)))
+                 (puthash id t seen)
+                 (push ticket unread)))))
+         (setq zoho-desk--home-unread
+               (seq-take
+                (sort (nreverse unread)
+                      (lambda (a b)
+                        (string-greaterp
+                         (or (alist-get 'modifiedTime a)
+                             (alist-get 'createdTime a) "")
+                         (or (alist-get 'modifiedTime b)
+                             (alist-get 'createdTime b) ""))))
+                zoho-desk-home-unread-limit))
+         (zoho-desk--home-redraw))))))
+
+;;;###autoload
+(defun zoho-desk-home-refresh-unread (&rest _)
+  "Refresh the home buffer's unread ticket list in the background.
+Quietly does nothing when `zoho-desk-home-unread-tickets' is nil or no
+credentials are configured, so startup stays silent on machines without
+Zoho access.  Never prompts: when `zoho-desk-department-id' is unset the
+views fetched here are not cached for the dashboard, whose department
+prompt must stay the authority."
+  (interactive)
+  (when (and zoho-desk-home-unread-tickets
+             (ignore-errors (zoho-desk--home-unread-configured-p)))
+    (let ((generation (cl-incf zoho-desk--home-unread-generation)))
+      (cond
+       (zoho-desk-home-unread-views
+        (zoho-desk--home-resolve-sources
+         (lambda (sources err)
+           (cond
+            (err (message "Zoho Desk: unread tickets: %s" err))
+            ((= generation zoho-desk--home-unread-generation)
+             (zoho-desk--home-unread-scan sources generation))))))
+       (zoho-desk--views
+        (zoho-desk--home-unread-scan
+         (mapcar #'list (zoho-desk--home-view-ids zoho-desk--views))
+         generation))
+       (t
+        (zoho-desk--fetch-views-async
+         (lambda (views err)
+           (cond
+            (err (message "Zoho Desk: unread tickets: %s" err))
+            ((= generation zoho-desk--home-unread-generation)
+             (when (zoho-desk--department-params)
+               (setq zoho-desk--views views)
+               (unless zoho-desk--selected-view-ids
+                 (setq zoho-desk--selected-view-ids
+                       (list (alist-get 'id (zoho-desk--default-view))))))
+             (zoho-desk--home-unread-scan
+              (mapcar #'list (zoho-desk--home-view-ids views))
+              generation))))))))))
+
+(defun zoho-desk--home-ticket-label (ticket)
+  "Return TICKET's one-line label for the home buffer list."
+  (format "%-9s %-20s %s"
+          (concat "#" (format "%s" (or (alist-get 'ticketNumber ticket) "?")))
+          (truncate-string-to-width
+           (or (zoho-desk--contact-name ticket) "") 20 nil nil "…")
+          (truncate-string-to-width
+           (or (alist-get 'subject ticket) "") 60 nil nil "…")))
+
+(defun zoho-desk-home-jump-to-unread ()
+  "Move point to the home buffer's Unread Tickets section."
+  (interactive)
+  (unless (search-forward "Unread Tickets:" (point-max) t)
+    (search-backward "Unread Tickets:" (point-min) t))
+  (forward-line 1)
+  (back-to-indentation))
+
+(defun zoho-desk--home-insert-unread (&rest _)
+  "Insert the Unread Tickets section into the home buffer.
+Advice after `spacemacs-buffer//insert-warnings', which places the
+section above the recent files list."
+  (when (and zoho-desk-home-unread-tickets zoho-desk--home-unread)
+    (insert (concat
+             (when (bound-and-true-p dotspacemacs-startup-buffer-show-icons)
+               (concat (spacemacs-buffer//font-icons-icon "" 'dot) " "))
+             (propertize "Unread Tickets:" 'face 'font-lock-keyword-face)
+             (propertize " (u)" 'face 'font-lock-comment-face)))
+    (dolist (ticket zoho-desk--home-unread)
+      (insert (concat
+               "\n    "
+               (when (bound-and-true-p dotspacemacs-show-startup-list-numbers)
+                 (format "%2s " (number-to-string
+                                 spacemacs-buffer--startup-list-nr)))
+               " " (spacemacs-buffer//font-icons-icon "" 'dot) " "))
+      (let ((id (alist-get 'id ticket))
+            (number (alist-get 'ticketNumber ticket)))
+        (widget-create 'push-button
+                       :action (lambda (&rest _)
+                                 (zoho-desk--show-ticket id number))
+                       :mouse-face 'highlight
+                       :follow-link "\C-m"
+                       :button-prefix ""
+                       :button-suffix ""
+                       :button-face 'zoho-desk-unread
+                       :format "%[%t%]"
+                       (zoho-desk--home-ticket-label ticket)))
+      (setq spacemacs-buffer--startup-list-nr
+            (1+ spacemacs-buffer--startup-list-nr)))
+    (insert spacemacs-buffer-list-separator)))
+
+(with-eval-after-load 'core-spacemacs-buffer
+  (advice-add 'spacemacs-buffer//insert-warnings :after
+              #'zoho-desk--home-insert-unread)
+  (advice-add 'spacemacs-buffer/refresh :after
+              #'zoho-desk-home-refresh-unread)
+  (define-key spacemacs-buffer-mode-map "u" #'zoho-desk-home-jump-to-unread))
 
 ;;;; Evil integration
 
