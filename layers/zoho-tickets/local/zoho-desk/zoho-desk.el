@@ -2332,26 +2332,34 @@ show their summary with a not-fetched marker."
              (concat (string-trim (or (alist-get 'summary thread) ""))
                      "\n\n[not fetched — RET here to load]")))))
 
+(defun zoho-desk--time-entry-seconds (entry)
+  "Return time ENTRY's logged duration in seconds."
+  (+ (* 3600 (string-to-number
+              (format "%s" (or (alist-get 'hoursSpent entry) 0))))
+     (* 60 (string-to-number
+            (format "%s" (or (alist-get 'minutesSpent entry) 0))))
+     (string-to-number
+      (format "%s" (or (alist-get 'secondsSpent entry) 0)))))
+
 (defun zoho-desk--insert-time-entry (entry)
   "Insert time ENTRY as an org subheading with its details.
-The heading carries the essentials (when, who, how long, a
-description snippet) because entries are collapsed by default;
-the body holds the full description and billing details."
-  (let* ((hours (string-to-number
-                 (format "%s" (or (alist-get 'hoursSpent entry) 0))))
-         (minutes (string-to-number
-                   (format "%s" (or (alist-get 'minutesSpent entry) 0))))
-         (seconds (string-to-number
-                   (format "%s" (or (alist-get 'secondsSpent entry) 0))))
+The heading carries the interval and duration; the collapsed
+body holds the description and billing details."
+  (let* ((total (zoho-desk--time-entry-seconds entry))
          ;; The API stores only the start (executedTime) and the
          ;; duration; the interval's end is computed for display.
          (end (when-let* ((iso (alist-get 'executedTime entry))
                           ((stringp iso))
                           ((not (string-empty-p iso)))
-                          (total (+ (* 3600 hours) (* 60 minutes) seconds))
                           ((cl-plusp total)))
-                (format-time-string "–%H:%M"
+                (format-time-string " – [%Y-%m-%d %H:%M]"
                                     (time-add (date-to-time iso) total))))
+         (start (let ((iso (or (alist-get 'executedTime entry)
+                               (alist-get 'createdTime entry))))
+                  (if (and (stringp iso) (not (string-empty-p iso)))
+                      (format-time-string "[%Y-%m-%d %H:%M]"
+                                          (date-to-time iso))
+                    "[unknown]")))
          (description (alist-get 'description entry))
          (html (and (stringp description)
                     (string-match-p "<[a-zA-Z!/]" description)))
@@ -2359,20 +2367,13 @@ the body holds the full description and billing details."
                 (if html
                     (zoho-desk--html-to-text description)
                   (or description ""))))
-         (summary (car (split-string text "\n" t "[ \t]+")))
          (owner (and (alist-get 'owner entry)
                      (zoho-desk--person-name (alist-get 'owner entry)))))
-    (insert (format "** %s%s (%dh %02dm)%s%s\n"
-                    (zoho-desk--org-timestamp
-                     (or (alist-get 'executedTime entry)
-                         (alist-get 'createdTime entry)))
+    (insert (format "** %s%s (%dh %02dm)%s\n"
+                    start
                     (or end "")
-                    hours minutes
-                    (if owner (concat " " owner) "")
-                    (if summary
-                        (concat " — " (truncate-string-to-width
-                                       summary 48 nil nil "…"))
-                      ""))
+                    (/ total 3600) (/ (% total 3600) 60)
+                    (if owner (concat " " owner) ""))
             ":PROPERTIES:\n"
             (format ":TIME_ENTRY_ID: %s\n" (alist-get 'id entry))
             ":END:\n")
@@ -2602,6 +2603,11 @@ so the lines appear once `zoho-desk--ticket-fields' is primed
             "\n"
             (propertize "\n" 'zoho-desk-time-body-end t))
     (mapc #'zoho-desk--insert-time-entry time-entries)
+    (when time-entries
+      (let ((total (apply #'+ (mapcar #'zoho-desk--time-entry-seconds
+                                      time-entries))))
+        (insert (format "** Total (%dh %02dm)\n"
+                        (/ total 3600) (/ (% total 3600) 60)))))
     (goto-char (point-min))))
 
 (defun zoho-desk--normalize-buffer-style ()
@@ -2801,7 +2807,7 @@ BACKGROUND refreshes the buffer without popping or selecting it
        ("GET" ,(format "/tickets/%s/comments" id)
         :params (("limit" 50)) :soft-errors t)
        ("GET" ,(format "/tickets/%s/timeEntry" id)
-        :params (("limit" 50)) :soft-errors t)
+        :params (("limit" 100)) :soft-errors t)
        ;; Primes the field metadata cache the Details section's
        ;; custom field lines need; dropped once cached.
        ,@(unless zoho-desk--ticket-fields
