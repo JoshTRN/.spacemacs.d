@@ -1985,6 +1985,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z 2") #'zoho-desk-tab-thread)
     (define-key map (kbd "C-c z 3") #'zoho-desk-tab-comments)
     (define-key map (kbd "C-c z 4") #'zoho-desk-tab-time-logs)
+    (define-key map (kbd "C-c z 5") #'zoho-desk-tab-attachments)
     (define-key map (kbd "C-c z s") #'zoho-desk-send-reply)
     (define-key map (kbd "C-c z l") #'zoho-desk-submit-time-log)
     (define-key map (kbd "C-c z a") #'zoho-desk-add-email)
@@ -1999,6 +2000,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z u") #'zoho-desk-set-status)
     (define-key map (kbd "C-c z f") #'zoho-desk-set-field)
     (define-key map (kbd "C-c z g") #'zoho-desk-refresh-ticket)
+    (define-key map (kbd "C-c z d") #'zoho-desk-ticket-files)
     (define-key map (kbd "C-c z o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "C-c z w") #'zoho-desk-copy-org-snippet)
     (define-key map (kbd "C-c z y") #'zoho-desk-copy-ticket-url)
@@ -2024,7 +2026,8 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
   '(("Overview" . nil)
     ("Thread" . "Email Thread")
     ("Comments" . "Comments")
-    ("Time Logs" . "Time Logs"))
+    ("Time Logs" . "Time Logs")
+    ("Attachments" . "Attachments"))
   "Tab labels and the top-level org heading each narrows to.")
 
 (defvar-local zoho-desk--threads nil
@@ -2294,6 +2297,11 @@ until an entry is opened by hand (TAB on its heading)."
   (interactive)
   (zoho-desk--set-tab "Time Logs"))
 
+(defun zoho-desk-tab-attachments ()
+  "Narrow to the Attachments section."
+  (interactive)
+  (zoho-desk--set-tab "Attachments"))
+
 (defun zoho-desk-tab-next (&optional backward)
   "Cycle to the next tab, or previous when BACKWARD."
   (interactive)
@@ -2387,6 +2395,216 @@ body holds the description and billing details."
                   (zoho-desk--html-to-org-body description)
                 (zoho-desk--org-body description))))))
 
+;;;; Attachments
+
+(defcustom zoho-desk-ticket-directory "~/zoho-tickets/"
+  "Root of the per-ticket work directories.
+Each ticket gets <root>/<ticket number>/: attachments download
+into it, tracked by attachment id in its .attachments.json
+manifest, and its local-files/ subdirectory is left alone for own
+casework files.  `zoho-desk-ticket-files' jumps there."
+  :type 'directory)
+
+(defun zoho-desk--ticket-dir (&optional number)
+  "Return the work directory of ticket NUMBER, default the current one."
+  (let ((number (or number
+                    (alist-get 'ticketNumber (zoho-desk--ticket-at-point))
+                    (user-error "No ticket here"))))
+    (file-name-as-directory
+     (expand-file-name (format "%s" number)
+                       (expand-file-name zoho-desk-ticket-directory)))))
+
+(defun zoho-desk--ensure-ticket-dir (&optional number)
+  "Return the ticket's work directory, creating it on first use."
+  (let ((dir (zoho-desk--ticket-dir number)))
+    (make-directory (expand-file-name "local-files" dir) t)
+    dir))
+
+(defun zoho-desk-ticket-files (&optional number)
+  "Open dired in ticket NUMBER's (default the current one's) directory."
+  (interactive)
+  (dired (zoho-desk--ensure-ticket-dir number)))
+
+(defun zoho-desk--attachment-manifest (dir)
+  "Return DIR's attachment manifest, an alist of id symbol → filename."
+  (let ((file (expand-file-name ".attachments.json" dir)))
+    (when (file-exists-p file)
+      (ignore-errors
+        (zoho-desk--parse-json
+         (with-temp-buffer
+           (insert-file-contents file)
+           (buffer-string)))))))
+
+(defun zoho-desk--attachment-manifest-save (dir manifest)
+  "Write MANIFEST to DIR's .attachments.json."
+  (let ((coding-system-for-write 'utf-8))
+    (write-region (json-encode manifest) nil
+                  (expand-file-name ".attachments.json" dir) nil 'silent)))
+
+(defun zoho-desk--attachment-file (attachment dir &optional manifest)
+  "Return ATTACHMENT's downloaded file under DIR, nil when not there.
+A manifest entry whose file was deleted counts as not there, so
+the attachment can be downloaded again."
+  (when-let* ((manifest (or manifest (zoho-desk--attachment-manifest dir)))
+              (name (alist-get (intern (format "%s" (alist-get 'id attachment)))
+                               manifest))
+              (file (expand-file-name name dir))
+              ((file-exists-p file)))
+    file))
+
+(defun zoho-desk--attachment-unique-file (name dir manifest id)
+  "Return a free path for attachment ID's NAME under DIR.
+NAME itself unless the manifest assigns it to another attachment
+or an unmanifested file (casework) already uses it; then name-2
+style variants."
+  (let* ((base (file-name-sans-extension name))
+         (ext (or (file-name-extension name t) ""))
+         (candidate name)
+         (n 1))
+    (while (let ((owner (car (rassoc candidate manifest))))
+             (if owner
+                 (not (equal (format "%s" owner) id))
+               (file-exists-p (expand-file-name candidate dir))))
+      (setq n (1+ n)
+            candidate (format "%s-%d%s" base n ext)))
+    (expand-file-name candidate dir)))
+
+(defconst zoho-desk--attachment-check
+  (propertize "✓ " 'face 'success 'zoho-desk-attachment-check t)
+  "Marker prepended to downloaded entries in the Attachments section.")
+
+(defvar zoho-desk--attachment-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'zoho-desk-mouse-download-attachment)
+    map)
+  "Keymap on attachment names; mouse-1 downloads (RET via dwim).")
+
+(defun zoho-desk--insert-attachments (attachments number)
+  "Insert ATTACHMENTS of ticket NUMBER as a downloadable org section.
+Entries already in the ticket's work directory carry the ✓
+marker and open on RET instead of downloading."
+  (insert "* Attachments\n")
+  (if (null attachments)
+      (insert "  No attachments.\n")
+    (let* ((dir (zoho-desk--ticket-dir number))
+           (manifest (zoho-desk--attachment-manifest dir)))
+      (dolist (attachment attachments)
+        (let ((downloaded (zoho-desk--attachment-file attachment dir
+                                                      manifest)))
+          (insert "- "
+                  (if downloaded zoho-desk--attachment-check "")
+                  (propertize (format "%s" (or (alist-get 'name attachment)
+                                               "unnamed"))
+                              'zoho-desk-attachment attachment
+                              'face 'org-link
+                              'mouse-face 'highlight
+                              'help-echo (if downloaded
+                                             "mouse-1 / RET: open downloaded file"
+                                           "mouse-1 / RET: download")
+                              'keymap zoho-desk--attachment-keymap)
+                  (format " (%s)"
+                          (file-size-human-readable
+                           (string-to-number
+                            (format "%s" (or (alist-get 'size attachment)
+                                             0)))))
+                  (format " %s" (zoho-desk--org-timestamp
+                                 (alist-get 'createdTime attachment)))
+                  (if-let* ((creator (alist-get 'creator attachment)))
+                      (format " %s" (zoho-desk--person-name creator))
+                    "")
+                  "\n"))))))
+
+(defun zoho-desk--attachment-on-line ()
+  "Return the attachment alist of the entry on the current line, if any."
+  (save-excursion
+    (beginning-of-line)
+    (or (get-text-property (point) 'zoho-desk-attachment)
+        (when-let* ((pos (next-single-property-change
+                          (point) 'zoho-desk-attachment nil
+                          (line-end-position))))
+          (get-text-property pos 'zoho-desk-attachment)))))
+
+(defun zoho-desk--mark-attachment-downloaded (id)
+  "Add the ✓ marker to the rendered entry of attachment ID, if shown."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (let ((id (format "%s" id))
+            (pos (point-min))
+            match)
+        (while (and (not match) pos)
+          (let ((attachment (get-text-property pos 'zoho-desk-attachment)))
+            (if (and attachment
+                     (equal id (format "%s" (alist-get 'id attachment))))
+                (setq match pos)
+              (setq pos (next-single-property-change
+                         pos 'zoho-desk-attachment)))))
+        (when match
+          (let ((end (next-single-property-change match 'zoho-desk-attachment
+                                                  nil (point-max)))
+                (inhibit-read-only t))
+            (put-text-property match end 'help-echo
+                               "mouse-1 / RET: open downloaded file")
+            (unless (get-text-property (max (point-min) (1- match))
+                                       'zoho-desk-attachment-check)
+              (goto-char match)
+              (insert zoho-desk--attachment-check)))
+          (zoho-desk--protect-buffer))))))
+
+(defun zoho-desk-download-attachment-at-point (&optional force)
+  "Download the attachment on the current line into the ticket's directory.
+An attachment already there (per the directory's manifest) is
+opened instead; with FORCE (\\[universal-argument]) it is
+downloaded again over the existing file.  The download runs in
+the background and checkmarks the entry when it lands."
+  (interactive "P")
+  (let* ((attachment (or (zoho-desk--attachment-on-line)
+                         (user-error "No attachment on this line")))
+         (id (format "%s" (alist-get 'id attachment)))
+         (name (format "%s" (or (alist-get 'name attachment) "attachment")))
+         (dir (zoho-desk--ensure-ticket-dir))
+         (manifest (zoho-desk--attachment-manifest dir))
+         (existing (zoho-desk--attachment-file attachment dir manifest))
+         (ticket-id (alist-get 'id zoho-desk--ticket))
+         (buf (current-buffer)))
+    (if (and existing (not force))
+        (find-file existing)
+      (let ((file (or existing
+                      (zoho-desk--attachment-unique-file name dir manifest
+                                                         id))))
+        (message "Zoho Desk: downloading %s …" name)
+        (zoho-desk--request-async
+         "GET" (format "/tickets/%s/attachments/%s/content" ticket-id id)
+         (lambda (data err)
+           (cond
+            (err (message "Zoho Desk: %s download failed: %s" name err))
+            ((or (null data) (string-empty-p data))
+             (message "Zoho Desk: %s came back empty" name))
+            (t
+             (let ((coding-system-for-write 'binary))
+               (write-region data nil file nil 'silent))
+             ;; Re-read the manifest: another download may have
+             ;; written it while this one was in flight.
+             (let ((manifest (zoho-desk--attachment-manifest dir)))
+               (setf (alist-get (intern id) manifest)
+                     (file-name-nondirectory file))
+               (zoho-desk--attachment-manifest-save dir manifest))
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (when (equal ticket-id (alist-get 'id zoho-desk--ticket))
+                   (zoho-desk--mark-attachment-downloaded id))))
+             (message "Zoho Desk: saved %s (%s)"
+                      (abbreviate-file-name file)
+                      (file-size-human-readable (string-bytes data))))))
+         :raw t)))))
+
+(defun zoho-desk-mouse-download-attachment (event)
+  "Download the attachment clicked on in EVENT."
+  (interactive "e")
+  (with-selected-window (posn-window (event-start event))
+    (mouse-set-point event)
+    (call-interactively #'zoho-desk-download-attachment-at-point)))
+
 ;;;; Ticket fields
 
 (defvar zoho-desk--ticket-fields nil
@@ -2443,7 +2661,8 @@ so the lines appear once `zoho-desk--ticket-fields' is primed
                               (string-join (split-string value "\n") " ")
                               76 nil nil "…")))))))))
 
-(defun zoho-desk--render-ticket-org (ticket threads comments time-entries)
+(defun zoho-desk--render-ticket-org (ticket threads comments time-entries
+                                            attachments)
   "Fill the current buffer with an org document for TICKET."
   (let ((ticket-id (alist-get 'id ticket))
         (inhibit-read-only t))
@@ -2608,6 +2827,8 @@ so the lines appear once `zoho-desk--ticket-fields' is primed
                                       time-entries))))
         (insert (format "** Total (%dh %02dm)\n"
                         (/ total 3600) (/ (% total 3600) 60)))))
+    (zoho-desk--insert-attachments attachments
+                                   (alist-get 'ticketNumber ticket))
     (goto-char (point-min))))
 
 (defun zoho-desk--normalize-buffer-style ()
@@ -2808,6 +3029,8 @@ BACKGROUND refreshes the buffer without popping or selecting it
         :params (("limit" 50)) :soft-errors t)
        ("GET" ,(format "/tickets/%s/timeEntry" id)
         :params (("limit" 100)) :soft-errors t)
+       ("GET" ,(format "/tickets/%s/attachments" id)
+        :params (("limit" 50)) :soft-errors t)
        ;; Primes the field metadata cache the Details section's
        ;; custom field lines need; dropped once cached.
        ,@(unless zoho-desk--ticket-fields
@@ -2817,7 +3040,7 @@ BACKGROUND refreshes the buffer without popping or selecting it
        (when (= generation zoho-desk--show-ticket-generation)
          (if err
              (zoho-desk--show-fetch-error buf err)
-           (when-let* ((fields (alist-get 'data (nth 4 results))))
+           (when-let* ((fields (alist-get 'data (nth 5 results))))
              (setq zoho-desk--ticket-fields fields))
            (zoho-desk--fetch-older-threads
             id generation (alist-get 'data (nth 1 results))
@@ -2826,7 +3049,8 @@ BACKGROUND refreshes the buffer without popping or selecting it
                id generation buf tab
                (nth 0 results) threads
                (alist-get 'data (nth 2 results))
-               (alist-get 'data (nth 3 results)))))))))))
+               (alist-get 'data (nth 3 results))
+               (alist-get 'data (nth 4 results)))))))))))
 
 (defun zoho-desk--fetch-older-threads (id generation threads callback)
   "Fetch the rest of ticket ID's thread list after first page THREADS.
@@ -2863,12 +3087,13 @@ when a newer `zoho-desk--show-ticket' has superseded this one."
 
 (defun zoho-desk--prefetch-thread-bodies (id generation buf tab
                                              ticket threads comments
-                                             time-entries)
+                                             time-entries attachments)
   "Fetch full bodies of TICKET's newest THREADS, then render into BUF.
 Only the newest `zoho-desk-thread-prefetch' THREADS are fetched;
 each fetched body is merged into its thread alist as `content'.
 GENERATION guards against a newer fetch; TAB is the tab to select;
-COMMENTS and TIME-ENTRIES are passed through to the render."
+COMMENTS, TIME-ENTRIES and ATTACHMENTS are passed through to the
+render."
   (let ((prefetch (seq-take threads zoho-desk-thread-prefetch)))
     (zoho-desk--request-all-async
      (mapcar (lambda (thread)
@@ -2891,7 +3116,7 @@ COMMENTS and TIME-ENTRIES are passed through to the render."
                        thread))
                    prefetch)
                   (nthcdr (length prefetch) threads))
-          comments time-entries tab))))))
+          comments time-entries attachments tab))))))
 
 ;;;; Inline images
 
@@ -3066,14 +3291,16 @@ Cached images show immediately; the rest arrive in the background."
             (zoho-desk--overlay-inline-image (concat "file://" file)
                                              file)))))))
 
-(defun zoho-desk--render-ticket (buf ticket threads comments time-entries tab)
+(defun zoho-desk--render-ticket (buf ticket threads comments time-entries
+                                     attachments tab)
   "Fill BUF with TICKET's org document and select TAB."
   (with-current-buffer buf
     (rename-buffer (format "*zoho #%s*" (alist-get 'ticketNumber ticket)) t)
     (let ((inhibit-read-only t))
       (widen)
       (erase-buffer))
-    (zoho-desk--render-ticket-org ticket threads comments time-entries)
+    (zoho-desk--render-ticket-org ticket threads comments time-entries
+                                  attachments)
     (setq zoho-desk--ticket ticket
           zoho-desk--threads threads
           zoho-desk--comment-posting nil
@@ -3152,20 +3379,25 @@ when it is gone (e.g. the ticket was refreshed meanwhile)."
 
 (defun zoho-desk-ret-dwim ()
   "Expand the thread when point is on its not-fetched marker line.
-Everywhere else RET keeps the binding it would have without this
-command (evil-org's, evil's, or org's — resolved dynamically, so
-the fallback tracks whatever those modes set up)."
+On an Attachments entry, download it.  Everywhere else RET keeps
+the binding it would have without this command (evil-org's,
+evil's, or org's — resolved dynamically, so the fallback tracks
+whatever those modes set up)."
   (interactive)
-  (if (save-excursion
-        (beginning-of-line)
-        (re-search-forward zoho-desk--unfetched-marker-re
-                           (line-end-position) t))
-      (zoho-desk-expand-thread-at-point)
+  (cond
+   ((save-excursion
+      (beginning-of-line)
+      (re-search-forward zoho-desk--unfetched-marker-re
+                         (line-end-position) t))
+    (zoho-desk-expand-thread-at-point))
+   ((zoho-desk--attachment-on-line)
+    (call-interactively #'zoho-desk-download-attachment-at-point))
+   (t
     (let* ((zoho-desk-ticket-minor-mode nil)
            (cmd (key-binding (kbd "RET"))))
       (when (and (commandp cmd) (not (eq cmd 'zoho-desk-ret-dwim)))
         (setq this-command cmd)
-        (call-interactively cmd)))))
+        (call-interactively cmd))))))
 
 ;;;; Email reply
 

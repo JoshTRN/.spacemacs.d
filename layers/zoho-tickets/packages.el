@@ -131,6 +131,7 @@ Each entry is either:
       "y" 'zoho-desk-copy-ticket-url
       "#" 'zoho-desk-copy-ticket-number
       "b" 'zoho-desk-browse-ticket
+      "F" 'zoho-desk-ticket-files
       "d" 'zoho-desk-select-department
       "s" 'zoho-desk-toggle-sidebar
       "q" 'zoho-desk-quit)
@@ -145,10 +146,13 @@ Each entry is either:
       "2" 'zoho-desk-tab-thread
       "3" 'zoho-desk-tab-comments
       "4" 'zoho-desk-tab-time-logs
+      "5" 'zoho-desk-tab-attachments
       "go" 'zoho-desk-tab-overview
       "ge" 'zoho-desk-tab-thread
       "gc" 'zoho-desk-tab-comments
       "gl" 'zoho-desk-tab-time-logs
+      "ga" 'zoho-desk-tab-attachments
+      "gf" 'zoho-desk-ticket-files
       "gw" 'zoho-desk-browse-ticket
       "e" 'zoho-desk-expand-thread-at-point
       "s" 'zoho-desk-send-reply
