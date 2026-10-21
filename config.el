@@ -847,11 +847,16 @@ workspace.windowAdded.connect(helmFloatSetup);
 Called with two arguments, the helm frame and the parent frame.
 os/<system-type>.el adds WM-specific float/placement steps here.")
 
+(defvar persp-init-new-frame-behaviour-override)
+
 (defun helm-floating-frame-display (buffer &optional resume)
   "Display helm BUFFER in a floating frame ~75% of the parent frame."
   (helm-floating-frame-hyprland-register)
   (helm-floating-frame-kwin-register)
   (let ((parent (selected-frame))
+        ;; keep persp-mode from stamping the perspective's saved
+        ;; window configuration into the new frame
+        (persp-init-new-frame-behaviour-override 'persp-ignore-wconf)
         (helm-display-buffer-width  (round (* 0.75 (frame-width))))
         (helm-display-buffer-height (round (* 0.75 (frame-height)))))
     (helm-display-buffer-in-own-frame buffer resume)

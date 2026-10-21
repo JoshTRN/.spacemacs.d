@@ -202,6 +202,8 @@ Existing timers for the same (file+heading+timestamp) are replaced."
 
 (require 'helm)
 
+(defvar persp-init-new-frame-behaviour-override)
+
 (defun helm-floating-frame-darwin-display (buffer &optional resume)
   "Display Helm BUFFER in an independent frame centered before showing it.
 RESUME is passed through to Helm's own-frame display function."
@@ -209,6 +211,9 @@ RESUME is passed through to Helm's own-frame display function."
          (geometry (frame-geometry parent))
          (position (alist-get 'outer-position geometry))
          (size (alist-get 'outer-size geometry))
+         ;; keep persp-mode from stamping the perspective's saved
+         ;; window configuration into the new frame
+         (persp-init-new-frame-behaviour-override 'persp-ignore-wconf)
          (helm-display-buffer-width (round (* 0.75 (frame-width parent))))
          (helm-display-buffer-height (round (* 0.75 (frame-height parent))))
          (pop-up-frame-function
