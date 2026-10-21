@@ -610,7 +610,11 @@ It should only modify the values of Spacemacs settings."
    dotspacemacs-home-shorten-agenda-source nil
 
    ;; If non-nil then byte-compile some of Spacemacs files.
-   dotspacemacs-byte-compile nil))
+   dotspacemacs-byte-compile nil)
+  ;; validation advice reads custom-type right after this fn, before layers load
+  (let ((type (get 'dotspacemacs-startup-lists 'custom-type)))
+    (unless (member '(const (unread-tickets)) type)
+      (nconc type '((const (unread-tickets)))))))
 
 (defun dotspacemacs/user-env ()
   "Environment variables setup.

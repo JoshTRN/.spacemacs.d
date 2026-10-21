@@ -859,7 +859,15 @@ os/<system-type>.el adds WM-specific float/placement steps here.")
         (persp-init-new-frame-behaviour-override 'persp-ignore-wconf)
         (helm-display-buffer-width  (round (* 0.75 (frame-width))))
         (helm-display-buffer-height (round (* 0.75 (frame-height)))))
-    (helm-display-buffer-in-own-frame buffer resume)
+    ;; helm derives the frame position and whether the prompt goes in
+    ;; the header line from point's screen position (and errors when
+    ;; point is scrolled out of view).  The WM centers the frame
+    ;; anyway, so feed it a fixed top-center point: prompt always on
+    ;; top, parent scroll position never consulted.
+    (cl-letf (((symbol-function 'window-absolute-pixel-position)
+               (lambda (&optional _)
+                 (cons (/ (frame-native-width parent) 2) 0))))
+      (helm-display-buffer-in-own-frame buffer resume))
     (run-hook-with-args 'helm-floating-frame-after-display-functions
                         (window-frame (get-buffer-window buffer t))
                         parent)))
