@@ -197,6 +197,11 @@ Falls back to the prompting default when no known config matches."
     ;; `evil-set-initial-state' on, match the buffer names instead.
     (with-eval-after-load 'evil
       (add-to-list 'evil-buffer-regexps '("\\` \\*agent-shell-hq-" . emacs)))
+    ;; the autoload cookies load agent-shell-hq-toggle.el directly and
+    ;; nothing requires the umbrella agent-shell-hq.el, so :config below
+    ;; would never run; pull the umbrella in to fire it.
+    (with-eval-after-load 'agent-shell-hq-toggle
+      (require 'agent-shell-hq))
     :config
     ;; Emacs state keeps evil off these buffers but also loses the SPC
     ;; leader; the package maps never bind SPC, so hang the leader map
@@ -242,25 +247,39 @@ Falls back to the prompting default when no known config matches."
           (agent-shell-hq-close-sidebar))))
     (advice-add 'agent-shell-hq-toggle-select
                 :around #'agent-shell-hq-select-close-sidebar)
-    (defun agent-shell-hq-toggle-reshow-sidebar (orig)
-      (if (and (string= (safe-persp-name (get-current-persp))
-                        agent-shell-hq-toggle--persp-name)
-               (get-buffer agent-shell-hq-toggle--sidebar-name)
-               (not (get-buffer-window agent-shell-hq-toggle--sidebar-name)))
-          (progn
-            (display-buffer-in-side-window
-             (get-buffer agent-shell-hq-toggle--sidebar-name)
-             `((side          . left)
-               (window-width  . ,agent-shell-hq-toggle-sidebar-width)
-               (window-parameters . ((no-delete-other-windows . t)))))
-            (unless (window-live-p agent-shell-hq-toggle--main-window)
-              (setq agent-shell-hq-toggle--main-window
-                    (seq-find (lambda (w)
-                                (not (window-parameter w 'window-side)))
-                              (window-list))))
-            (select-window
-             (get-buffer-window agent-shell-hq-toggle--sidebar-name))
-            (agent-shell-hq-toggle-refresh))
-        (funcall orig)))
+    ;; The package runs HQ in its own perspective; sessions started
+    ;; there end up in no reachable layout, and quitting persp-switches
+    ;; over whatever windows were live.  Run it in the current layout
+    ;; instead, saving/restoring the window configuration ourselves:
+    ;; open (fresh setup) -> re-show (hidden sidebar) -> quit (restore).
+    (defvar agent-shell-hq-entry-wconf nil)
+    (defun agent-shell-hq-workspace-toggle ()
+      "Open, re-show, or quit the HQ sidebar without touching perspectives."
+      (interactive)
+      (cond
+       ((get-buffer-window agent-shell-hq-toggle--sidebar-name)
+        (agent-shell-hq-toggle--teardown)
+        (when-let* ((buf (get-buffer agent-shell-hq-toggle--sidebar-name)))
+          (kill-buffer buf))
+        (when agent-shell-hq-entry-wconf
+          (set-window-configuration agent-shell-hq-entry-wconf)
+          (setq agent-shell-hq-entry-wconf nil)))
+       ((get-buffer agent-shell-hq-toggle--sidebar-name)
+        (display-buffer-in-side-window
+         (get-buffer agent-shell-hq-toggle--sidebar-name)
+         `((side          . left)
+           (window-width  . ,agent-shell-hq-toggle-sidebar-width)
+           (window-parameters . ((no-delete-other-windows . t)))))
+        (unless (window-live-p agent-shell-hq-toggle--main-window)
+          (setq agent-shell-hq-toggle--main-window
+                (seq-find (lambda (w)
+                            (not (window-parameter w 'window-side)))
+                          (window-list))))
+        (select-window
+         (get-buffer-window agent-shell-hq-toggle--sidebar-name))
+        (agent-shell-hq-toggle-refresh))
+       (t
+        (setq agent-shell-hq-entry-wconf (current-window-configuration))
+        (agent-shell-hq-toggle--setup))))
     (advice-add 'agent-shell-hq-toggle
-                :around #'agent-shell-hq-toggle-reshow-sidebar)))
+                :override #'agent-shell-hq-workspace-toggle)))
