@@ -132,6 +132,7 @@ Each entry is either:
       "#" 'zoho-desk-copy-ticket-number
       "b" 'zoho-desk-browse-ticket
       "F" 'zoho-desk-ticket-files
+      "A" 'zoho-desk-upload-attachment
       "d" 'zoho-desk-select-department
       "s" 'zoho-desk-toggle-sidebar
       "q" 'zoho-desk-quit)
@@ -159,6 +160,7 @@ Each entry is either:
       "l" 'zoho-desk-submit-time-log
       "." 'zoho-desk-pick-executed-time
       "a" 'zoho-desk-add-email
+      "A" 'zoho-desk-upload-attachment
       "ia" 'zoho-desk-attach-file
       "ii" 'zoho-desk-insert-image
       "ik" 'zoho-desk-refresh-session-cookie

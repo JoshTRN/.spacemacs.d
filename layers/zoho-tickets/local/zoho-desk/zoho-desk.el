@@ -2001,6 +2001,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z f") #'zoho-desk-set-field)
     (define-key map (kbd "C-c z g") #'zoho-desk-refresh-ticket)
     (define-key map (kbd "C-c z d") #'zoho-desk-ticket-files)
+    (define-key map (kbd "C-c z U") #'zoho-desk-upload-attachment)
     (define-key map (kbd "C-c z o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "C-c z w") #'zoho-desk-copy-org-snippet)
     (define-key map (kbd "C-c z y") #'zoho-desk-copy-ticket-url)
@@ -2479,6 +2480,31 @@ style variants."
     map)
   "Keymap on attachment names; mouse-1 downloads (RET via dwim).")
 
+(defun zoho-desk--attachment-entry (attachment downloaded)
+  "Return ATTACHMENT's rendered entry line.
+DOWNLOADED marks it as already in the ticket's work directory."
+  (concat "- "
+          (if downloaded zoho-desk--attachment-check "")
+          (propertize (format "%s" (or (alist-get 'name attachment)
+                                       "unnamed"))
+                      'zoho-desk-attachment attachment
+                      'face 'org-link
+                      'mouse-face 'highlight
+                      'help-echo (if downloaded
+                                     "mouse-1 / RET: open downloaded file"
+                                   "mouse-1 / RET: download")
+                      'keymap zoho-desk--attachment-keymap)
+          (format " (%s)"
+                  (file-size-human-readable
+                   (string-to-number
+                    (format "%s" (or (alist-get 'size attachment) 0)))))
+          (format " %s" (zoho-desk--org-timestamp
+                         (alist-get 'createdTime attachment)))
+          (if-let* ((creator (alist-get 'creator attachment)))
+              (format " %s" (zoho-desk--person-name creator))
+            "")
+          "\n"))
+
 (defun zoho-desk--insert-attachments (attachments number)
   "Insert ATTACHMENTS of ticket NUMBER as a downloadable org section.
 Entries already in the ticket's work directory carry the ✓
@@ -2489,30 +2515,23 @@ marker and open on RET instead of downloading."
     (let* ((dir (zoho-desk--ticket-dir number))
            (manifest (zoho-desk--attachment-manifest dir)))
       (dolist (attachment attachments)
-        (let ((downloaded (zoho-desk--attachment-file attachment dir
-                                                      manifest)))
-          (insert "- "
-                  (if downloaded zoho-desk--attachment-check "")
-                  (propertize (format "%s" (or (alist-get 'name attachment)
-                                               "unnamed"))
-                              'zoho-desk-attachment attachment
-                              'face 'org-link
-                              'mouse-face 'highlight
-                              'help-echo (if downloaded
-                                             "mouse-1 / RET: open downloaded file"
-                                           "mouse-1 / RET: download")
-                              'keymap zoho-desk--attachment-keymap)
-                  (format " (%s)"
-                          (file-size-human-readable
-                           (string-to-number
-                            (format "%s" (or (alist-get 'size attachment)
-                                             0)))))
-                  (format " %s" (zoho-desk--org-timestamp
-                                 (alist-get 'createdTime attachment)))
-                  (if-let* ((creator (alist-get 'creator attachment)))
-                      (format " %s" (zoho-desk--person-name creator))
-                    "")
-                  "\n"))))))
+        (insert (zoho-desk--attachment-entry
+                 attachment
+                 (zoho-desk--attachment-file attachment dir manifest)))))))
+
+(defun zoho-desk--add-attachment-entry (attachment downloaded)
+  "Insert ATTACHMENT at the top of the rendered Attachments section."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (when (re-search-forward "^\\* Attachments$" nil t)
+        (forward-line 1)
+        (let ((inhibit-read-only t))
+          (when (looking-at "  No attachments\\.\n")
+            (delete-region (point) (match-end 0)))
+          (insert (zoho-desk--attachment-entry attachment downloaded))
+          (zoho-desk--protect-buffer))))))
 
 (defun zoho-desk--attachment-on-line ()
   "Return the attachment alist of the entry on the current line, if any."
@@ -2604,6 +2623,59 @@ the background and checkmarks the entry when it lands."
   (with-selected-window (posn-window (event-start event))
     (mouse-set-point event)
     (call-interactively #'zoho-desk-download-attachment-at-point)))
+
+(defun zoho-desk-upload-attachment (file &optional public)
+  "Upload FILE as an attachment of the current ticket.
+With PUBLIC (\\[universal-argument]) the attachment is visible to
+the customer, not only to agents.  The upload runs in the
+background; the Attachments section gains the entry when it
+lands, already checkmarked when FILE lives inside the ticket's
+work directory (the prompt starts there)."
+  (interactive
+   (let ((dir (ignore-errors (zoho-desk--ticket-dir))))
+     (list (read-file-name "Upload attachment: "
+                           (and dir (file-directory-p dir) dir)
+                           nil t)
+           current-prefix-arg)))
+  (let* ((ticket (or (zoho-desk--ticket-at-point)
+                     (user-error "No ticket here")))
+         (ticket-id (alist-get 'id ticket))
+         (number (alist-get 'ticketNumber ticket))
+         (name (file-name-nondirectory file))
+         (buf (current-buffer)))
+    (unless (file-regular-p file)
+      (user-error "Zoho Desk: %s is not a regular file" file))
+    (message "Zoho Desk: uploading %s …" name)
+    (pcase-let ((`(,method ,path . ,keys)
+                 (zoho-desk--file-upload-spec
+                  (format "/tickets/%s/attachments" ticket-id) file
+                  (and public '(("isPublic" "true"))))))
+      (apply #'zoho-desk--request-async method path
+             (lambda (attachment err)
+               (if (or err (not (alist-get 'id attachment)))
+                   (zoho-desk--announce-write-failure
+                    (format "%s upload" name)
+                    (or err "no attachment in response") buf)
+                 (let* ((dir (zoho-desk--ticket-dir number))
+                        (rel (file-relative-name (expand-file-name file)
+                                                 dir))
+                        (local (not (or (string-prefix-p ".." rel)
+                                        (file-name-absolute-p rel)))))
+                   (when local
+                     (let ((manifest (zoho-desk--attachment-manifest dir)))
+                       (setf (alist-get (intern (format "%s" (alist-get
+                                                              'id attachment)))
+                                        manifest)
+                             rel)
+                       (zoho-desk--attachment-manifest-save dir manifest)))
+                   (when (buffer-live-p buf)
+                     (with-current-buffer buf
+                       (when (equal ticket-id
+                                    (alist-get 'id zoho-desk--ticket))
+                         (zoho-desk--add-attachment-entry attachment local))))
+                   (message "Zoho Desk: uploaded %s to #%s%s" name number
+                            (if public " (public)" "")))))
+             keys))))
 
 ;;;; Ticket fields
 
@@ -3692,10 +3764,10 @@ Free-typed input that matches no contact goes in verbatim."
     (zoho-desk--set-reply-to-address
      (if current (concat current "," email) email))))
 
-(defun zoho-desk--upload-spec (file)
-  "Return an async request spec uploading FILE to the uploads store.
-The response id goes in the `uploads' field of a sendReply
-payload, which attaches the file to that reply's thread."
+(defun zoho-desk--file-upload-spec (path file &optional params)
+  "Return an async request spec posting FILE as multipart data to PATH.
+The file rides in the form's `file' field; PARAMS are query
+parameters."
   (let* ((boundary (format "----zoho-desk-%06x%06x"
                            (random #xffffff) (random #xffffff)))
          (body (with-temp-buffer
@@ -3709,9 +3781,16 @@ payload, which attaches the file to that reply's thread."
                  (goto-char (point-max))
                  (insert "\r\n--" boundary "--\r\n")
                  (buffer-string))))
-    (list "POST" "/uploads"
+    (list "POST" path
+          :params params
           :raw-payload body
           :content-type (concat "multipart/form-data; boundary=" boundary))))
+
+(defun zoho-desk--upload-spec (file)
+  "Return an async request spec uploading FILE to the uploads store.
+The response id goes in the `uploads' field of a sendReply
+payload, which attaches the file to that reply's thread."
+  (zoho-desk--file-upload-spec "/uploads" file))
 
 (defconst zoho-desk--reply-file-link-re
   "\\[\\[file:\\([^][]+\\)\\]\\(?:\\[[^][]*\\]\\)?\\]"

@@ -21,7 +21,10 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
     ~RET~ instead (~C-u RET~ re-downloads; deleting the file also
     makes it downloadable again). The directory's =local-files/=
     subfolder is never touched by the layer — own casework files go
-    there (or anywhere; only manifested files count as attachments)
+    there (or anywhere; only manifested files count as attachments).
+    ~, A~ uploads a file as a ticket attachment (agent-only by
+    default, ~C-u~ makes it customer-visible); uploads from inside
+    the work directory are manifested, so they list as ✓ right away
   - Incoming HTML (thread bodies, descriptions, comments) is
     converted to org markup via pandoc, so bold, tables, code
     blocks, lists and links keep their formatting on ingest
@@ -210,13 +213,14 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, i k~    | ~C-c z k~    | Refresh the inline-image session cookie  |
 | ~, g w~ / ~, b~ | ~C-c z o~ | Open in browser                       |
 | ~, g f~    | ~C-c z d~    | Dired into the ticket's work directory   |
+| ~, A~      | ~C-c z U~    | Upload a file as ticket attachment (~C-u~: public) |
 | ~, r~      | ~C-c z g~    | Refresh ticket                           |
 
 The dashboard panes have leader keys too: sidebar ~, t~ toggle /
 ~, r~ refresh / ~, d~ department / ~, q~ quit; table ~, o~ open /
 ~, n~ / ~, p~ pages / ~, t~ time / ~, c i/o/k~ clock /
 ~, w~ snippet / ~, y~ url / ~, #~ number / ~, b~ browser /
-~, F~ ticket work directory.
+~, F~ ticket work directory / ~, A~ upload attachment.
 
 Replies: the Email Thread section lists emails newest-first, with a
 =** Reply= subheading at the top — everything under that subheading
