@@ -218,4 +218,49 @@ Falls back to the prompting default when no known config matches."
           (agent-shell-rename-session-buffer buf name)
           (when (get-buffer-window " *agent-shell-hq-sidebar*")
             (agent-shell-hq-toggle-refresh)))))
-    (advice-add 'agent-shell-hq-label :override #'agent-shell-hq-rename)))
+    (advice-add 'agent-shell-hq-label :override #'agent-shell-hq-rename)
+    ;; q and RET hide the sidebar instead of leaving the workspace
+    ;; (C-g still leaves); aah re-shows a hidden sidebar.
+    (defun agent-shell-hq-close-sidebar ()
+      "Hide the sidebar window, keeping the shell in the main window."
+      (interactive)
+      (when-let ((win (get-buffer-window agent-shell-hq-toggle--sidebar-name)))
+        (when (window-live-p agent-shell-hq-toggle--main-window)
+          (select-window agent-shell-hq-toggle--main-window))
+        (delete-window win)))
+    (define-key agent-shell-hq-toggle-map (kbd "q") #'agent-shell-hq-close-sidebar)
+    (unless (assq 'agent-shell-hq-close-sidebar agent-shell-hq-toggle--hints)
+      (setq agent-shell-hq-toggle--hints
+            (append (butlast agent-shell-hq-toggle--hints)
+                    '((agent-shell-hq-close-sidebar . "hide")
+                      (agent-shell-hq-toggle        . "quit")))))
+    (defun agent-shell-hq-select-close-sidebar (orig)
+      (let ((entry (nth agent-shell-hq-toggle--current-idx
+                        agent-shell-hq-toggle--entries)))
+        (funcall orig)
+        (when (eq (plist-get entry :type) 'buffer)
+          (agent-shell-hq-close-sidebar))))
+    (advice-add 'agent-shell-hq-toggle-select
+                :around #'agent-shell-hq-select-close-sidebar)
+    (defun agent-shell-hq-toggle-reshow-sidebar (orig)
+      (if (and (string= (safe-persp-name (get-current-persp))
+                        agent-shell-hq-toggle--persp-name)
+               (get-buffer agent-shell-hq-toggle--sidebar-name)
+               (not (get-buffer-window agent-shell-hq-toggle--sidebar-name)))
+          (progn
+            (display-buffer-in-side-window
+             (get-buffer agent-shell-hq-toggle--sidebar-name)
+             `((side          . left)
+               (window-width  . ,agent-shell-hq-toggle-sidebar-width)
+               (window-parameters . ((no-delete-other-windows . t)))))
+            (unless (window-live-p agent-shell-hq-toggle--main-window)
+              (setq agent-shell-hq-toggle--main-window
+                    (seq-find (lambda (w)
+                                (not (window-parameter w 'window-side)))
+                              (window-list))))
+            (select-window
+             (get-buffer-window agent-shell-hq-toggle--sidebar-name))
+            (agent-shell-hq-toggle-refresh))
+        (funcall orig)))
+    (advice-add 'agent-shell-hq-toggle
+                :around #'agent-shell-hq-toggle-reshow-sidebar)))

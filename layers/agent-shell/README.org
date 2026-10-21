@@ -48,4 +48,8 @@ Add =agent-shell= to =dotspacemacs-configuration-layers= (via
 | ~SPC a a h~   | Toggle the HQ workspace (sidebar + perspective)    |
 | ~SPC a a P~   | Peek at all sessions in a posframe overlay         |
 
+In the HQ sidebar, ~q~ (and ~RET~ on a session) hides the sidebar
+while staying in the workspace; ~SPC a a h~ re-shows it and ~C-g~
+leaves the workspace.
+
 Agent-specific starters are bound in the host-local config.
