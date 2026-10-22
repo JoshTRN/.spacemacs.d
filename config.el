@@ -276,6 +276,33 @@ resolves it back (`agent-shell-markdown--resolve-lang-mode')."
  persp-auto-save-opt 0
  )
 
+;; persp-mode saves the selected frame's window configuration on every
+;; make-frame and restores it into frames on init/delete (helm popups
+;; included), stamping stale layouts over live ones and erroring in
+;; window-state-put.  Layouts aren't used here, so skip all of persp's
+;; automatic window-conf save/restore.
+(defun persp-skip-window-conf-save-restore (&rest _) t)
+(with-eval-after-load 'persp-mode
+  (add-hook 'persp-save-restore-window-conf-filter-functions
+            #'persp-skip-window-conf-save-restore))
+
+;; the spacemacs persp<->eyebrowse sync loads the layout's saved
+;; eyebrowse workspace into the selected frame whenever persp-activate
+;; runs -- including for popup frames (helm) -- repainting the parent
+;; with a stale layout and erroring in window-state-put.  one layout in
+;; use here: drop the sync, eyebrowse stays per-frame.
+(with-eval-after-load 'eyebrowse
+  (remove-hook 'persp-before-switch-functions
+               #'spacemacs/update-eyebrowse-for-perspective)
+  (remove-hook 'eyebrowse-post-window-switch-hook
+               #'spacemacs/save-eyebrowse-for-perspective)
+  (remove-hook 'persp-activated-functions
+               #'spacemacs/load-eyebrowse-for-perspective)
+  (remove-hook 'persp-before-save-state-to-file-functions
+               #'spacemacs/update-eyebrowse-for-perspective)
+  (remove-hook 'persp-after-load-state-functions
+               #'spacemacs/load-eyebrowse-after-loading-layout))
+
 ;; the startup lists no longer include recents, so nothing loads recentf
 ;; before spacemacs' idle save timer clobbers the cache with an empty list
 (recentf-mode)
