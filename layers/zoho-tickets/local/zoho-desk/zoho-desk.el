@@ -616,14 +616,7 @@ reliable probe of the servlet session."
                               (alist-get 'webUrl ticket)))))
       (browse-url url))
     (let ((input (condition-case nil
-                     (read-string
-                      (concat "Zoho session refresh — in the browser: "
-                              "SIGN IN to the /agent/ console if it isn't "
-                              "already (a fresh browser shows the customer "
-                              "portal — that session won't do), reload, then "
-                              "F12 → Network → right-click a fresh "
-                              "support-host request → Copy → Copy request "
-                              "headers, and paste the whole block here: "))
+                     (read-string "Zoho Desk session refresh — copy request headers: ")
                    (quit nil))))
       (when input
         (pcase-let ((`(,parsed-cookie . ,parsed-ua)
@@ -1986,6 +1979,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z 3") #'zoho-desk-tab-comments)
     (define-key map (kbd "C-c z 4") #'zoho-desk-tab-time-logs)
     (define-key map (kbd "C-c z 5") #'zoho-desk-tab-attachments)
+    (define-key map (kbd "C-c z 6") #'zoho-desk-tab-local-files)
     (define-key map (kbd "C-c z s") #'zoho-desk-send-reply)
     (define-key map (kbd "C-c z l") #'zoho-desk-submit-time-log)
     (define-key map (kbd "C-c z a") #'zoho-desk-add-email)
@@ -2000,7 +1994,7 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     (define-key map (kbd "C-c z u") #'zoho-desk-set-status)
     (define-key map (kbd "C-c z f") #'zoho-desk-set-field)
     (define-key map (kbd "C-c z g") #'zoho-desk-refresh-ticket)
-    (define-key map (kbd "C-c z d") #'zoho-desk-ticket-files)
+    (define-key map (kbd "C-c z d") #'zoho-desk-tab-local-files)
     (define-key map (kbd "C-c z U") #'zoho-desk-upload-attachment)
     (define-key map (kbd "C-c z o") #'zoho-desk-browse-ticket)
     (define-key map (kbd "C-c z w") #'zoho-desk-copy-org-snippet)
@@ -2028,8 +2022,11 @@ the sidebar back off the table window at `zoho-desk-sidebar-width'."
     ("Thread" . "Email Thread")
     ("Comments" . "Comments")
     ("Time Logs" . "Time Logs")
-    ("Attachments" . "Attachments"))
-  "Tab labels and the top-level org heading each narrows to.")
+    ("Attachments" . "Attachments")
+    ("Local Files" . local-files))
+  "Tab labels and the top-level org heading each narrows to.
+The `local-files' pseudo heading shows the ticket's work
+directory as a dired buffer instead of narrowing.")
 
 (defvar-local zoho-desk--threads nil
   "Thread list of the ticket in this buffer, newest first.")
@@ -2236,7 +2233,20 @@ Toggle interactively with `zoho-desk-toggle-header-key'."
      (propertize "   (, g to navigate)" 'face 'shadow))))
 
 (defun zoho-desk--set-tab (heading)
-  "Narrow the ticket buffer to HEADING, or widen when nil."
+  "Narrow the ticket buffer to HEADING, or widen when nil.
+The `local-files' pseudo heading swaps the window to the work
+directory's dired instead; conversely, selecting a real tab from
+that dired swaps the window back to the ticket document first."
+  (if (eq heading 'local-files)
+      (zoho-desk-tab-local-files)
+    (when (bound-and-true-p zoho-desk-local-files-mode)
+      (unless (buffer-live-p zoho-desk--ticket-buffer)
+        (user-error "No ticket document to go back to"))
+      (pop-to-buffer-same-window zoho-desk--ticket-buffer))
+    (zoho-desk--set-org-tab heading)))
+
+(defun zoho-desk--set-org-tab (heading)
+  "Narrow the ticket buffer to org HEADING, or widen when nil."
   (widen)
   (when zoho-desk--tab-padding-overlay
     (delete-overlay zoho-desk--tab-padding-overlay)
@@ -2302,6 +2312,45 @@ until an entry is opened by hand (TAB on its heading)."
   "Narrow to the Attachments section."
   (interactive)
   (zoho-desk--set-tab "Attachments"))
+
+(defvar-local zoho-desk--local-files-number nil
+  "Ticket number whose work directory this dired buffer shows.")
+
+(defvar zoho-desk-local-files-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c z 1") #'zoho-desk-tab-overview)
+    (define-key map (kbd "C-c z 2") #'zoho-desk-tab-thread)
+    (define-key map (kbd "C-c z 3") #'zoho-desk-tab-comments)
+    (define-key map (kbd "C-c z 4") #'zoho-desk-tab-time-logs)
+    (define-key map (kbd "C-c z 5") #'zoho-desk-tab-attachments)
+    (define-key map (kbd "C-c z 6") #'zoho-desk-tab-local-files)
+    map)
+  "Keymap of `zoho-desk-local-files-mode'.")
+
+(define-minor-mode zoho-desk-local-files-mode
+  "Ticket header-line tabs on top of a work directory's dired buffer.
+\\{zoho-desk-local-files-mode-map}"
+  :lighter nil
+  (setq header-line-format
+        (when zoho-desk-local-files-mode
+          '(:eval (zoho-desk--header-line)))))
+
+(defun zoho-desk-tab-local-files ()
+  "Show the ticket's work directory as the Local Files tab.
+The window swaps to a dired of the directory wearing the same
+header-line tabs; selecting any other tab swaps back to the
+ticket document (as does dired's q)."
+  (interactive)
+  (let* ((number (or zoho-desk--local-files-number
+                     (alist-get 'ticketNumber (zoho-desk--ticket-at-point))
+                     (user-error "No ticket here")))
+         (buf (dired-noselect (zoho-desk--ensure-ticket-dir number))))
+    (with-current-buffer buf
+      (setq zoho-desk--current-tab 'local-files
+            zoho-desk--local-files-number number)
+      (zoho-desk-local-files-mode 1)
+      (revert-buffer))
+    (pop-to-buffer-same-window buf)))
 
 (defun zoho-desk-tab-next (&optional backward)
   "Cycle to the next tab, or previous when BACKWARD."
@@ -5387,7 +5436,10 @@ section above the recent files list."
     (evil-define-minor-mode-key state 'zoho-desk-ticket-minor-mode
       (kbd "gt") #'zoho-desk-tab-next
       (kbd "gT") #'zoho-desk-tab-previous
-      (kbd "RET") #'zoho-desk-ret-dwim))
+      (kbd "RET") #'zoho-desk-ret-dwim)
+    (evil-define-minor-mode-key state 'zoho-desk-local-files-mode
+      (kbd "gt") #'zoho-desk-tab-next
+      (kbd "gT") #'zoho-desk-tab-previous))
   ;; evil-org's state maps outrank the plain minor-mode map, so field
   ;; cycling must be registered with Evil too.
   (dolist (state '(normal insert))

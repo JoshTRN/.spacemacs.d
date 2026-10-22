@@ -148,12 +148,13 @@ Each entry is either:
       "3" 'zoho-desk-tab-comments
       "4" 'zoho-desk-tab-time-logs
       "5" 'zoho-desk-tab-attachments
+      "6" 'zoho-desk-tab-local-files
       "go" 'zoho-desk-tab-overview
       "ge" 'zoho-desk-tab-thread
       "gc" 'zoho-desk-tab-comments
       "gl" 'zoho-desk-tab-time-logs
       "ga" 'zoho-desk-tab-attachments
-      "gf" 'zoho-desk-ticket-files
+      "gf" 'zoho-desk-tab-local-files
       "gw" 'zoho-desk-browse-ticket
       "e" 'zoho-desk-expand-thread-at-point
       "s" 'zoho-desk-send-reply
@@ -179,4 +180,21 @@ Each entry is either:
       "#" 'zoho-desk-copy-ticket-number)
     (spacemacs/set-leader-keys-for-major-mode 'zoho-desk-comment-mode
       "s" 'zoho-desk-comment-send
-      "k" 'zoho-desk-comment-abort)))
+      "k" 'zoho-desk-comment-abort)
+    ;; The work directory's dired wears the ticket tabs; same
+    ;; navigation leader keys as the ticket document.
+    (spacemacs/declare-prefix-for-minor-mode 'zoho-desk-local-files-mode
+                                             "g" "go to")
+    (spacemacs/set-leader-keys-for-minor-mode 'zoho-desk-local-files-mode
+      "1" 'zoho-desk-tab-overview
+      "2" 'zoho-desk-tab-thread
+      "3" 'zoho-desk-tab-comments
+      "4" 'zoho-desk-tab-time-logs
+      "5" 'zoho-desk-tab-attachments
+      "6" 'zoho-desk-tab-local-files
+      "go" 'zoho-desk-tab-overview
+      "ge" 'zoho-desk-tab-thread
+      "gc" 'zoho-desk-tab-comments
+      "gl" 'zoho-desk-tab-time-logs
+      "ga" 'zoho-desk-tab-attachments
+      "gf" 'zoho-desk-tab-local-files)))

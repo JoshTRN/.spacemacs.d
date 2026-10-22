@@ -14,8 +14,11 @@ Zoho Desk ticketing inside Emacs, via the Zoho Desk REST API
     time log is an org subheading
   - The Attachments tab lists the ticket's attachments with size,
     date and uploader. Every ticket has a work directory
-    (=zoho-desk-ticket-directory=/<ticket number>/, ~, g f~ opens it
-    in dired): ~RET~ or a click on an entry downloads it there, a
+    (=zoho-desk-ticket-directory=/<ticket number>/): the *Local
+    Files* header tab (~, g f~ / ~, 6~) swaps the window to a dired
+    of it wearing the same tabs — any other tab (or ~q~) swaps back
+    to the ticket document. ~RET~ or a click on an attachment entry
+    downloads it there, a
     hidden =.attachments.json= manifest maps attachment ids to the
     saved files, and already-downloaded entries show a ✓ and open on
     ~RET~ instead (~C-u RET~ re-downloads; deleting the file also
@@ -189,8 +192,8 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 
 | Leader key | Also         | Description                              |
 |------------+--------------+------------------------------------------|
-| ~, 1-5~    | ~C-c z 1-5~, click | Overview / Thread / Comments / Time Logs / Attachments tab |
-| ~, g o/e/c/l/a~ |           | Go to Overview / Email thread / Comments / Logs / Attachments |
+| ~, 1-6~    | ~C-c z 1-6~, click | Overview / Thread / Comments / Time Logs / Attachments / Local Files tab |
+| ~, g o/e/c/l/a/f~ |           | Go to Overview / Email thread / Comments / Logs / Attachments / Local Files |
 |            | ~gt~ / ~gT~  | Next / previous tab (evil)               |
 | ~, e~      | ~C-c z e~, ~RET~ | Fetch full email body at point (~RET~ on its marker line) |
 | ~, s~      | ~C-c z s~    | Send the Reply section as email          |
@@ -212,7 +215,7 @@ leader (~,~ or ~SPC m~) as well as =C-c z=:
 | ~, i e~    | ~C-c z i~    | Insert clipboard image into the reply    |
 | ~, i k~    | ~C-c z k~    | Refresh the inline-image session cookie  |
 | ~, g w~ / ~, b~ | ~C-c z o~ | Open in browser                       |
-| ~, g f~    | ~C-c z d~    | Dired into the ticket's work directory   |
+| ~, g f~    | ~C-c z d~    | Local Files tab: work directory as dired |
 | ~, A~      | ~C-c z U~    | Upload a file as ticket attachment (~C-u~: public) |
 | ~, r~      | ~C-c z g~    | Refresh ticket                           |
 
