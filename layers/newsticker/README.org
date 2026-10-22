@@ -1,0 +1,29 @@
+#+TITLE: newsticker layer
+
+* Description
+Evil-friendly keybindings for Emacs' built-in newsticker RSS reader.
+Nothing is installed; the layer only fixes the treeview, whose keymap is
+otherwise fully shadowed by evil normal state (RET lands on =evil-ret=,
+so selecting a feed looks like nothing happens).
+
+* Install
+Add =newsticker= to =custom-layers= in =layers.el=. Feeds are configured
+with =newsticker-url-list= (or ~a~ in the treeview).
+
+* Key bindings
+| Key binding | Description                                 |
+|-------------+---------------------------------------------|
+| ~SPC a r n~ | open newsticker (=newsticker-show-news=)    |
+In the treeview (all three panes):
+| ~RET~       | select feed / show item / scroll item       |
+| ~q~         | quit, restore window layout                 |
+| ~g r~       | fetch current feed                          |
+| ~g R~       | fetch all feeds                             |
+| ~u~         | redraw                                      |
+| ~J~ / ~K~   | next / previous feed                        |
+| ~C-j~ / ~C-k~ | next / previous item                      |
+| ~N~         | next new or immortal item                   |
+| ~o~ / ~O~   | mark item / all listed items old            |
+| ~I~         | toggle item immortal                        |
+| ~b~         | browse item link                            |
+| ~a~         | add feed URL                                |

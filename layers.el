@@ -40,6 +40,7 @@
    markdown
    markdown-indent
    multiple-cursors
+   newsticker
    nginx
    nixos
    (node :variables node-add-modules-path t)
